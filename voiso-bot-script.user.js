@@ -12,8 +12,8 @@
 // @connect      lk01.nl.wavix.net
 // @connect      script.google.com
 // @connect      script.googleusercontent.com
-// @updateURL    https://raw.githubusercontent.com/REPLACE_WITH_GITHUB_ACCOUNT/REPLACE_WITH_REPOSITORY/main/voiso-bot-script.meta.js
-// @downloadURL  https://raw.githubusercontent.com/REPLACE_WITH_GITHUB_ACCOUNT/REPLACE_WITH_REPOSITORY/main/voiso-bot-script.user.js
+// @updateURL    https://raw.githubusercontent.com/mikepz47/voiso-bot-script/main/voiso-bot-script.meta.js
+// @downloadURL  https://raw.githubusercontent.com/mikepz47/voiso-bot-script/main/voiso-bot-script.user.js
 // @run-at       document-start
 // ==/UserScript==
 
@@ -26,10 +26,7 @@
     // CONFIG - настройки интеграции AI
     // ============================================================================
     const AI_CHAT_ENDPOINT = 'https://lk01.nl.wavix.net:8444/v1/chat';
-    // Вставь сюда API key для прямого клиентского запроса (небезопасно для production).
-    const AI_HARDCODED_API_KEY = '13d21456-f7fc-4a02-a13a-52b80f7f7362';
     const AI_REQUEST_TIMEOUT_MS = 120000;
-    const FEEDBACK_ENDPOINT = 'https://script.google.com/macros/s/AKfycbymDoBY7QiMyFiHoaIJi3yfPcDO3YgHfXW0AbfbeFSyb9AMDf6a9FRtmwu7BnrKW40I/exec';
     const FEEDBACK_REQUEST_TIMEOUT_MS = 20000;
     const AI_TYPING_EFFECT_ENABLED = true;
     const AI_TYPING_EFFECT_MAX_CHARS = 3000;
@@ -46,17 +43,25 @@
 
     function getAiApiKey() {
         try {
-            const hardcodedKey = String(AI_HARDCODED_API_KEY || '').trim();
-            if (hardcodedKey) {
-                return hardcodedKey;
-            }
-
-            return (
+            return String(
                 pageWindow.VOISO_AI_API_KEY ||
                 pageWindow.__VOISO_AI_API_KEY ||
                 localStorage.getItem('voiso_ai_api_key') ||
                 ''
-            );
+            ).trim();
+        } catch (e) {
+            return '';
+        }
+    }
+
+    function getFeedbackEndpoint() {
+        try {
+            return String(
+                pageWindow.VOISO_FEEDBACK_ENDPOINT ||
+                pageWindow.__VOISO_FEEDBACK_ENDPOINT ||
+                localStorage.getItem('voiso_feedback_endpoint') ||
+                ''
+            ).trim();
         } catch (e) {
             return '';
         }
@@ -2616,6 +2621,9 @@
     const AI_HELP_BUTTON_SPIN_BASE_DEG_PER_SEC = 45;
     const AI_HELP_BUTTON_SPIN_ACCEL_STEP_DEG_PER_SEC = 7;
     const AI_HELP_BUTTON_SPIN_MAX_DEG_PER_SEC = 2520;
+    const AI_HELP_BUTTON_CHASE_START_MS = 20000;
+    const AI_HELP_BUTTON_CHASE_SWEEP_CYCLE_MS = 850;
+    const AI_HELP_BUTTON_CHASE_SIDE_PADDING_PX = 30;
 
     function logPhase(phase, data = {}) {
         logger.info(phase, data);
@@ -2710,13 +2718,28 @@
             const hue = ((elapsed % AI_HELP_BUTTON_RAINBOW_CYCLE_MS) / AI_HELP_BUTTON_RAINBOW_CYCLE_MS) * 360;
             const borderHue = (hue + 36) % 360;
             const glowHue = (hue + 72) % 360;
+            const chaseElapsed = elapsed - AI_HELP_BUTTON_CHASE_START_MS;
+
+            let sweepTranslateX = 0;
+            if (chaseElapsed >= 0) {
+                const viewportWidth = Math.max(
+                    Number(window.innerWidth) || 0,
+                    Number(document.documentElement?.clientWidth) || 0
+                );
+                const buttonWidth = Math.max(Number(button.offsetWidth) || 0, 108);
+                const sidePadding = AI_HELP_BUTTON_CHASE_SIDE_PADDING_PX;
+                const sweepRange = Math.max(0, viewportWidth - buttonWidth - sidePadding * 2);
+                const sweepPhase = (chaseElapsed % AI_HELP_BUTTON_CHASE_SWEEP_CYCLE_MS) / AI_HELP_BUTTON_CHASE_SWEEP_CYCLE_MS;
+                // Start from the right and quickly sweep to the left.
+                sweepTranslateX = -sweepRange * sweepPhase;
+            }
 
             button.style.backgroundColor = `hsl(${hue.toFixed(1)}, 100%, 52%)`;
             button.style.borderColor = `hsl(${borderHue.toFixed(1)}, 100%, 42%)`;
             button.style.color = '#ffffff';
             button.style.filter = 'saturate(1.35) contrast(1.1)';
             button.style.boxShadow = `0 0 0 1px rgba(255,255,255,0.14), 0 0 18px hsla(${glowHue.toFixed(1)}, 100%, 58%, 0.92)`;
-            button.style.transform = `rotate(${aiHelpButtonMotionSpinDeg.toFixed(2)}deg)`;
+            button.style.transform = `translateX(${sweepTranslateX.toFixed(2)}px) rotate(${aiHelpButtonMotionSpinDeg.toFixed(2)}deg)`;
 
             aiHelpButtonMotionRafId = requestAnimationFrame(animate);
         };
@@ -3083,6 +3106,11 @@
         }
 
         async sendFeedbackToSpreadsheet(payload) {
+            const feedbackEndpoint = getFeedbackEndpoint();
+            if (!feedbackEndpoint) {
+                throw new Error('Feedback endpoint was not found. Set localStorage["voiso_feedback_endpoint"].');
+            }
+
             const tmRequestFn = getTampermonkeyRequestFn();
             const headers = {
                 'Content-Type': 'application/json'
@@ -3096,7 +3124,7 @@
                     const tmResponse = await new Promise((resolve, reject) => {
                         tmRequestFn({
                             method: 'POST',
-                            url: FEEDBACK_ENDPOINT,
+                            url: feedbackEndpoint,
                             headers,
                             data: JSON.stringify(payload),
                             timeout: FEEDBACK_REQUEST_TIMEOUT_MS,
@@ -3123,7 +3151,7 @@
                 const timeoutId = setTimeout(() => controller.abort(), FEEDBACK_REQUEST_TIMEOUT_MS);
 
                 try {
-                    const response = await originalFetch(FEEDBACK_ENDPOINT, {
+                    const response = await originalFetch(feedbackEndpoint, {
                         method: 'POST',
                         headers,
                         body: JSON.stringify(payload),
@@ -3379,7 +3407,7 @@
             const apiKey = getAiApiKey();
             if (!apiKey) {
                 throw new Error(
-                    'API key was not found. Set AI_HARDCODED_API_KEY or provide window.VOISO_AI_API_KEY/localStorage["voiso_ai_api_key"].'
+                    'API key was not found. Set window.VOISO_AI_API_KEY or localStorage["voiso_ai_api_key"].'
                 );
             }
 

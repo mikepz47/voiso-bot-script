@@ -12,8 +12,8 @@
 // @connect      lk01.nl.wavix.net
 // @connect      script.google.com
 // @connect      script.googleusercontent.com
-// @updateURL    https://raw.githubusercontent.com/REPLACE_WITH_GITHUB_ACCOUNT/REPLACE_WITH_REPOSITORY/main/voiso-bot-script.meta.js
-// @downloadURL  https://raw.githubusercontent.com/REPLACE_WITH_GITHUB_ACCOUNT/REPLACE_WITH_REPOSITORY/main/voiso-bot-script.user.js
+// @updateURL    https://raw.githubusercontent.com/mikepz47/voiso-bot-script/main/voiso-bot-script.meta.js
+// @downloadURL  https://raw.githubusercontent.com/mikepz47/voiso-bot-script/main/voiso-bot-script.user.js
 // @run-at       document-start
 // ==/UserScript==
 
