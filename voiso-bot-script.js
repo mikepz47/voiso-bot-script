@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      3.3.1
+// @version      3.3.2
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -32,7 +32,7 @@
     const AI_TYPING_EFFECT_MAX_CHARS = 3000;
     const AI_TYPING_EFFECT_INTERVAL_MS = 16;
     const AI_TYPING_EFFECT_SPEED_MULTIPLIER = 3;
-    const USERSCRIPT_DOWNLOAD_URL_DEFAULT = 'https://raw.githubusercontent.com/REPLACE_WITH_GITHUB_ACCOUNT/REPLACE_WITH_REPOSITORY/main/voiso-bot-script.user.js';
+    const USERSCRIPT_DOWNLOAD_URL_DEFAULT = 'https://raw.githubusercontent.com/mikepz47/voiso-bot-script/main/voiso-bot-script.user.js';
 
     function extractRequestUrl(fetchArg) {
         if (!fetchArg) return '';
