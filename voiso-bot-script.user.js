@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      3.3.2
+// @version      3.3.3
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -39,6 +39,53 @@
         if (typeof fetchArg === 'string') return fetchArg;
         if (typeof fetchArg.url === 'string') return fetchArg.url;
         return String(fetchArg);
+    }
+
+    function isJsonContentType(contentType) {
+        const normalized = String(contentType || '').toLowerCase();
+        return normalized.includes('application/json') || normalized.includes('+json');
+    }
+
+    function hasFastTicketSignals(candidate) {
+        if (!candidate || typeof candidate !== 'object') return false;
+
+        if (getRepliesFromTicketData(candidate).length > 0) return true;
+        if (looksLikeTicketData(candidate, { fast: true })) return true;
+
+        const ticketId = getTicketIdFromPayload(candidate);
+        if (!ticketId) return false;
+
+        return Boolean(
+            candidate.data ||
+            candidate.ticket ||
+            candidate.currentTicket ||
+            candidate.current_ticket ||
+            candidate.included
+        );
+    }
+
+    function shouldStoreInterceptedPayload(data) {
+        if (!data || typeof data !== 'object') return false;
+
+        const candidates = [
+            data,
+            data.ticket,
+            data.currentTicket,
+            data.current_ticket,
+            data.ticketData,
+            data.data,
+            data.data?.ticket,
+            data.payload,
+            data.response
+        ];
+
+        for (const candidate of candidates) {
+            if (hasFastTicketSignals(candidate)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     function getAiApiKey() {
@@ -174,16 +221,16 @@
         }
 
         return originalFetch(...args).then(response => {
+            const contentType = String(response.headers?.get('content-type') || '');
+            if (!isJsonContentType(contentType)) {
+                return response;
+            }
+
             const clone = response.clone();
             clone.json()
                 .then(data => {
                     try {
-                        const str = JSON.stringify(data);
-                        // Ищем ticket/event данные
-                        if ((str.includes('ticket') && str.includes('created_at')) ||
-                            (str.includes('event') && str.includes('from_email')) ||
-                            (str.includes('messages') && str.includes('timestamp')) ||
-                            (str.includes('replies_info') && str.includes('replies'))) {
+                        if (shouldStoreInterceptedPayload(data)) {
                             console.log('[VOISO BOT] 🎯 API DATA INTERCEPTED from:', requestUrl || args[0]);
                             storeInterceptedApiData(data, requestUrl);
                         }
@@ -471,7 +518,7 @@
         return Array.isArray(replies) ? replies : [];
     }
 
-    function looksLikeTicketData(data) {
+    function looksLikeTicketData(data, options = {}) {
         if (!data || typeof data !== 'object') return false;
 
         if (Array.isArray(data.events) || Array.isArray(data.messages) || Array.isArray(data.comments)) {
@@ -501,6 +548,10 @@
             Array.isArray(attrs.activities)
         )) {
             return true;
+        }
+
+        if (options.fast === true) {
+            return false;
         }
 
         try {
@@ -770,11 +821,11 @@
             'data-json'
         ];
         const matches = [];
+        const MAX_DATA_ATTRIBUTE_SCAN_ELEMENTS = 6000;
 
         const priorityElements = document.querySelectorAll(
             '[data-ticket-json], [data-ticket-data], [data-initial-state], [data-state], [data-store], [data-json]'
         );
-        const allElements = document.querySelectorAll('*');
         const seenElements = new Set();
         const elements = [];
 
@@ -783,12 +834,38 @@
             seenElements.add(element);
         }
 
-        for (const element of allElements) {
-            if (seenElements.has(element)) continue;
-            const hasDataAttrs = Array.from(element.attributes || []).some(attr => attr.name.startsWith('data-'));
-            if (!hasDataAttrs) continue;
-            elements.push(element);
-            seenElements.add(element);
+        const root = document.body || document.documentElement;
+        if (root) {
+            const showElement = pageWindow.NodeFilter ? pageWindow.NodeFilter.SHOW_ELEMENT : 1;
+            const walker = document.createTreeWalker(root, showElement);
+            let scanned = 0;
+            let node = walker.currentNode;
+
+            while (node && scanned < MAX_DATA_ATTRIBUTE_SCAN_ELEMENTS) {
+                scanned += 1;
+
+                if (!seenElements.has(node)) {
+                    const attrs = node.attributes;
+                    if (attrs && attrs.length > 0) {
+                        for (let i = 0; i < attrs.length; i++) {
+                            const attrName = attrs[i]?.name || '';
+                            if (attrName.startsWith('data-')) {
+                                elements.push(node);
+                                seenElements.add(node);
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                node = walker.nextNode();
+            }
+
+            if (node) {
+                logger.info('Data-attribute scan limit reached', {
+                    limit: MAX_DATA_ATTRIBUTE_SCAN_ELEMENTS
+                });
+            }
         }
 
         for (const element of elements) {
@@ -3358,6 +3435,77 @@
             return '';
         }
 
+        createAiStreamAccumulator() {
+            return {
+                line_buffer: '',
+                accumulated_text: ''
+            };
+        }
+
+        resetAiStreamAccumulator(accumulator) {
+            if (!accumulator || typeof accumulator !== 'object') return;
+            accumulator.line_buffer = '';
+            accumulator.accumulated_text = '';
+        }
+
+        mergeAiStreamPiece(accumulator, piece) {
+            const textPiece = String(piece || '');
+            if (!textPiece || !accumulator) return;
+
+            if (!accumulator.accumulated_text) {
+                accumulator.accumulated_text = textPiece;
+                return;
+            }
+
+            if (textPiece.startsWith(accumulator.accumulated_text)) {
+                // Some backends stream full snapshots instead of token deltas.
+                accumulator.accumulated_text = textPiece;
+                return;
+            }
+
+            if (!accumulator.accumulated_text.endsWith(textPiece)) {
+                accumulator.accumulated_text += textPiece;
+            }
+        }
+
+        consumeAiStreamChunk(chunk, accumulator, options = {}) {
+            if (!accumulator || typeof accumulator !== 'object') return '';
+
+            const flush = options.flush === true;
+            const chunkText = String(chunk || '');
+            if (!chunkText && !flush) {
+                return String(accumulator.accumulated_text || '');
+            }
+
+            accumulator.line_buffer += chunkText;
+            const lines = accumulator.line_buffer.split(/\r?\n/);
+
+            if (flush) {
+                accumulator.line_buffer = '';
+            } else {
+                accumulator.line_buffer = lines.pop() || '';
+            }
+
+            for (const line of lines) {
+                const trimmed = String(line || '').trim();
+                if (!trimmed) continue;
+
+                const payload = trimmed.startsWith('data:')
+                    ? trimmed.replace(/^data:\s*/, '')
+                    : trimmed;
+
+                if (!payload || payload === '[DONE]') continue;
+
+                const parsed = safeJsonParse(payload);
+                if (!parsed) continue;
+
+                const piece = this.extractAiAnswerText(parsed);
+                this.mergeAiStreamPiece(accumulator, piece);
+            }
+
+            return String(accumulator.accumulated_text || '');
+        }
+
         extractAiAnswerTextFromRawResponse(rawResponseText) {
             const raw = String(rawResponseText || '').trim();
             if (!raw) return '';
@@ -3440,6 +3588,8 @@
                 try {
                     let partialResponseText = '';
                     let partialAnswer = '';
+                    let processedProgressLength = 0;
+                    const streamAccumulator = this.createAiStreamAccumulator();
                     const tmResponse = await new Promise((resolve, reject) => {
                         const requestHandle = tmRequestFn({
                             method: 'POST',
@@ -3450,9 +3600,21 @@
                             onload: resolve,
                             onerror: reject,
                             onprogress: event => {
-                                partialResponseText = String(event?.responseText || partialResponseText || '');
+                                const nextResponseText = String(event?.responseText || partialResponseText || '');
+                                if (!nextResponseText) return;
+
+                                if (nextResponseText.length < processedProgressLength) {
+                                    processedProgressLength = 0;
+                                    this.resetAiStreamAccumulator(streamAccumulator);
+                                }
+
+                                const deltaChunk = nextResponseText.slice(processedProgressLength);
+                                processedProgressLength = nextResponseText.length;
+                                partialResponseText = nextResponseText;
+
+                                if (!deltaChunk) return;
                                 const incrementalAnswer = normalizeAiAnswerFormatting(
-                                    this.extractAiAnswerTextFromRawResponse(partialResponseText)
+                                    this.consumeAiStreamChunk(deltaChunk, streamAccumulator)
                                 );
                                 if (incrementalAnswer) {
                                     partialAnswer = incrementalAnswer;
@@ -3520,6 +3682,7 @@
                 const timeoutId = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
                 let partialResponseText = '';
                 let partialAnswer = '';
+                const streamAccumulator = this.createAiStreamAccumulator();
 
                 try {
                     const response = await originalFetch(AI_CHAT_ENDPOINT, {
@@ -3541,16 +3704,34 @@
                             const { done, value } = await reader.read();
                             if (done) break;
 
-                            partialResponseText += decoder.decode(value, { stream: true });
+                            const decodedChunk = decoder.decode(value, { stream: true });
+                            partialResponseText += decodedChunk;
                             const incrementalAnswer = normalizeAiAnswerFormatting(
-                                this.extractAiAnswerTextFromRawResponse(partialResponseText)
+                                this.consumeAiStreamChunk(decodedChunk, streamAccumulator)
                             );
                             if (incrementalAnswer) {
                                 partialAnswer = incrementalAnswer;
                             }
                         }
 
-                        partialResponseText += decoder.decode();
+                        const trailingChunk = decoder.decode();
+                        if (trailingChunk) {
+                            partialResponseText += trailingChunk;
+                            const trailingAnswer = normalizeAiAnswerFormatting(
+                                this.consumeAiStreamChunk(trailingChunk, streamAccumulator)
+                            );
+                            if (trailingAnswer) {
+                                partialAnswer = trailingAnswer;
+                            }
+                        }
+
+                        const flushedAnswer = normalizeAiAnswerFormatting(
+                            this.consumeAiStreamChunk('', streamAccumulator, { flush: true })
+                        );
+                        if (flushedAnswer) {
+                            partialAnswer = flushedAnswer;
+                        }
+
                         responseText = partialResponseText;
                     } else {
                         responseText = await response.text();
@@ -4216,15 +4397,26 @@
         validateInterceptedApiDataForCurrentTicket();
     }
 
+    function shouldReinjectAiButton() {
+        const button = getAiHelpButtonElement();
+        if (!button || !button.isConnected) return true;
+        if (!document.body) return false;
+        return button.parentElement !== document.body;
+    }
+
     function startSpaObserver() {
         if (observer || !document.body) return;
 
         observer = new MutationObserver(() => {
             clearTimeout(observerTimeout);
             observerTimeout = setTimeout(() => {
+                const prevTicketId = lastObservedTicketId;
                 handleTicketUrlChange();
-                injectButton();
-            }, 100);  // Дебаунс 100ms
+                const ticketChanged = prevTicketId !== lastObservedTicketId;
+                if (ticketChanged || shouldReinjectAiButton()) {
+                    injectButton();
+                }
+            }, 120);  // Дебаунс 120ms
         });
 
         observer.observe(document.body, {
