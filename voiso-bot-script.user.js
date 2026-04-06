@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      3.3.4
+// @version      3.3.5
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -2132,6 +2132,85 @@
         return clientMessages;
     }
 
+    /**
+     * Новый алгоритм: найти сообщения клиента относительно последнего клиентского сообщения.
+     * 1. Взять все клиентские сообщения (api_role или email-fallback), с непустым текстом.
+     * 2. Если нет — вернуть пусто.
+     * 3. T_last_client = timestamp последнего клиентского сообщения.
+     * 4. T_boundary = timestamp последнего resolve строго до T_last_client.
+     * 5. Если T_boundary есть — вернуть клиентские сообщения строго после T_boundary.
+     * 6. Если resolve до последнего клиентского нет — вернуть все клиентские сообщения.
+     * Returns { messages, boundaryResolveTs }
+     */
+    function findClientMessagesForContext(normalizedEvents) {
+        if (!Array.isArray(normalizedEvents)) return { messages: [], boundaryResolveTs: null };
+
+        // Step 1: Collect all client events (same role logic as filterClientMessagesByWindow)
+        const allClientEvents = [];
+        for (const event of normalizedEvents) {
+            if (!Number.isFinite(event.timestamp_ms)) continue;
+            if (event.is_system_banner === true || isSystemBannerText(event.text)) continue;
+            if (!event.text) continue;
+            let isClient;
+            if (event.api_role === 'customer') {
+                isClient = true;
+            } else if (event.api_role === 'agent') {
+                isClient = false;
+            } else {
+                const role = resolveMessageRoleByEmail(event);
+                isClient = role.role === 'client';
+            }
+            if (isClient) allClientEvents.push(event);
+        }
+
+        // Step 2: No client messages → empty
+        if (allClientEvents.length === 0) return { messages: [], boundaryResolveTs: null };
+
+        // Step 3: T_last_client (normalizedEvents are pre-sorted, so last element is the latest)
+        const tLastClient = allClientEvents[allClientEvents.length - 1].timestamp_ms;
+
+        // Step 4: Find last resolve strictly before T_last_client
+        let boundaryResolveTs = null;
+        for (const ev of normalizedEvents) {
+            if (ev.is_resolve && Number.isFinite(ev.timestamp_ms) && ev.timestamp_ms < tLastClient) {
+                if (boundaryResolveTs === null || ev.timestamp_ms > boundaryResolveTs) {
+                    boundaryResolveTs = ev.timestamp_ms;
+                }
+            }
+        }
+
+        // Step 5: Filter to events after boundary (or all if no boundary)
+        const filteredEvents = boundaryResolveTs !== null
+            ? allClientEvents.filter(ev => ev.timestamp_ms > boundaryResolveTs)
+            : allClientEvents;
+
+        // Step 6: Build message objects and deduplicate (same format as filterClientMessagesByWindow)
+        const uniqueMessages = new Map();
+        for (const event of filteredEvents) {
+            const message = {
+                timestamp: event.timestamp || new Date(event.timestamp_ms).toISOString(),
+                text: event.text,
+                email: normalizeEmail(event.email),
+                author: event.author || event.email || 'Unknown',
+                event_type: event.event_type,
+                direction: event.direction || '',
+                api_direction: event.api_direction || '',
+                dom_explicit_role: event.dom_explicit_role || '',
+                dom_side: event.dom_side || ''
+            };
+            const key = buildMessageStableKey(message);
+            if (!uniqueMessages.has(key)) {
+                uniqueMessages.set(key, message);
+            }
+        }
+
+        const messages = Array.from(uniqueMessages.values()).sort((a, b) =>
+            parseTimestampMs(a.timestamp) - parseTimestampMs(b.timestamp)
+        );
+
+        return { messages, boundaryResolveTs };
+    }
+
     function buildNormalizedTicketContext(ticketData) {
         const repliesCount = getRepliesFromTicketData(ticketData).length;
         const domMessageHints = buildDomMessageHintsIndex();
@@ -2150,34 +2229,10 @@
             }
         }
 
-        const directClientMessages = lastResolveEvent
-            ? filterClientMessages(normalizedEvents, lastResolveEvent)
-            : [];
-
-        let clientMessages = directClientMessages;
-        let fallbackUsed = false;
-        let usedResolveEvent = lastResolveEvent;
-
-        if (
-            lastResolveEvent &&
-            !domResolveFallbackUsed &&
-            directClientMessages.length === 0 &&
-            resolveEvents.length >= 2
-        ) {
-            const previousResolveEvent = resolveEvents[resolveEvents.length - 2];
-            const fallbackMessages = filterClientMessagesByWindow(
-                normalizedEvents,
-                previousResolveEvent.timestamp_ms,
-                lastResolveEvent.timestamp_ms
-            );
-
-            if (fallbackMessages.length > 0) {
-                fallbackUsed = true;
-                usedResolveEvent = previousResolveEvent;
-                clientMessages = fallbackMessages;
-                logger.info('Fallback window activated: previousResolve < timestamp <= lastResolve');
-            }
-        }
+        const { messages: clientMessages, boundaryResolveTs } = findClientMessagesForContext(normalizedEvents);
+        const usedResolveEvent = boundaryResolveTs !== null
+            ? (normalizedEvents.find(ev => ev.is_resolve && ev.timestamp_ms === boundaryResolveTs) || lastResolveEvent)
+            : lastResolveEvent;
 
         const resolveCount = resolveEvents.length;
         const resolveDiagnostics = {
@@ -2187,7 +2242,7 @@
         };
 
         logger.info(
-            `Diagnostics counters: replies=${repliesCount}, resolve=${resolveCount}, resolve_candidates=${resolveCandidateEvents.length}, client_after_resolve=${directClientMessages.length}, selected_client_messages=${clientMessages.length}, fallback_used=${fallbackUsed}, dom_resolve_fallback=${domResolveFallbackUsed}`
+            `Diagnostics counters: replies=${repliesCount}, resolve=${resolveCount}, resolve_candidates=${resolveCandidateEvents.length}, selected_client_messages=${clientMessages.length}, boundary_resolve_ts=${boundaryResolveTs}, new_algo_used=true, dom_resolve_fallback=${domResolveFallbackUsed}`
         );
 
         return {
@@ -2195,7 +2250,7 @@
             last_resolve_event: lastResolveEvent,
             used_resolve_event: usedResolveEvent,
             dom_resolve_fallback_used: domResolveFallbackUsed,
-            fallback_used: fallbackUsed,
+            fallback_used: false,
             client_messages: clientMessages,
             resolve_diagnostics: resolveDiagnostics
         };
@@ -2267,7 +2322,9 @@
 
             const normalizedContext = buildNormalizedTicketContext(ticketData);
             const lastResolve = normalizedContext.last_resolve_event;
-            if (!lastResolve || !lastResolve.timestamp) {
+            const clientMessages = normalizedContext.client_messages;
+
+            if ((!lastResolve || !lastResolve.timestamp) && clientMessages.length === 0) {
                 logger.warn('Resolve not found diagnostics', normalizedContext.resolve_diagnostics || {});
                 return {
                     success: false,
@@ -2275,7 +2332,6 @@
                 };
             }
 
-            const clientMessages = normalizedContext.client_messages;
             if (clientMessages.length === 0) {
                 return {
                     success: false,
@@ -2284,12 +2340,12 @@
             }
 
             const ticketId = getTicketId(ticketData);
-            const usedResolveTime = normalizedContext.used_resolve_event?.timestamp || lastResolve.timestamp;
+            const usedResolveTime = normalizedContext.used_resolve_event?.timestamp || lastResolve?.timestamp || '';
             const fallbackUsed = normalizedContext.fallback_used === true;
             const lastAgentEmail = findLastAgentEmail(normalizedContext.normalized_events);
             const normalizedPayload = {
                 ticket_id: ticketId,
-                last_resolve_time: lastResolve.timestamp,
+                last_resolve_time: lastResolve?.timestamp || '',
                 used_resolve_time: usedResolveTime,
                 fallback_used: fallbackUsed,
                 client_messages: clientMessages
@@ -2298,7 +2354,7 @@
             return {
                 success: true,
                 ticket_id: ticketId,
-                last_resolve_time: lastResolve.timestamp,
+                last_resolve_time: lastResolve?.timestamp || '',
                 used_resolve_time: usedResolveTime,
                 fallback_used: fallbackUsed,
                 client_messages: clientMessages,
