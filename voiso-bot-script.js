@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      3.3.3
+// @version      3.3.4
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -327,6 +327,7 @@
             normalized === 'inbound' ||
             normalized === 'incoming' ||
             normalized === 'in' ||
+            normalized === 'email in' ||
             normalized === 'from_customer' ||
             normalized === 'from_user' ||
             normalized === 'customer' ||
@@ -339,6 +340,7 @@
             normalized === 'outbound' ||
             normalized === 'outgoing' ||
             normalized === 'out' ||
+            normalized === 'email out' ||
             normalized === 'from_agent' ||
             normalized === 'agent' ||
             normalized === 'support'
@@ -1420,6 +1422,8 @@
         if (!rawEvent || typeof rawEvent !== 'object') return null;
 
         const attrs = isObject(rawEvent.attributes) ? rawEvent.attributes : {};
+        const rawApiRole = pickFirstString([rawEvent.r_source, attrs.r_source]).toLowerCase().trim();
+        const apiRole = rawApiRole === 'customer' ? 'customer' : rawApiRole === 'agent' ? 'agent' : '';
         const email = pickFirstString([
             rawEvent.from_email,
             rawEvent.email,
@@ -1656,6 +1660,7 @@
             is_resolve: isResolve,
             direction,
             api_direction: apiDirection,
+            api_role: apiRole,
             dom_explicit_role: domExplicitRole,
             dom_side: domSide,
             dom_role_ambiguous: domRoleAmbiguous,
@@ -2055,12 +2060,27 @@
                 continue;
             }
 
-            const role = resolveMessageRoleByEmail(event);
-            if (role.role !== 'client') {
+            // Priority 1: explicit r_source field from API
+            let isClientMessage;
+            let roleSource;
+            if (event.api_role === 'customer') {
+                isClientMessage = true;
+                roleSource = 'api_role_customer';
+            } else if (event.api_role === 'agent') {
+                isClientMessage = false;
+                roleSource = 'api_role_agent';
+            } else {
+                // Fallback: email-based role detection
+                const role = resolveMessageRoleByEmail(event);
+                isClientMessage = role.role === 'client';
+                roleSource = role.source;
+            }
+
+            if (!isClientMessage) {
                 logRejectedMessageCandidate(
                     event,
-                    role.source === 'missing_email' ? 'missing_email' : 'agent_email',
-                    { role_source: role.source }
+                    roleSource === 'missing_email' ? 'missing_email' : 'agent_email',
+                    { role_source: roleSource }
                 );
                 continue;
             }

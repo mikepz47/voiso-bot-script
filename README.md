@@ -31,6 +31,22 @@ git commit -m "init: voiso bot"
 ./scripts/release-userscript.sh 3.3.1
 ```
 
+## Локальная конфигурация (секреты не хранятся в коде)
+
+Перед использованием задайте значения в `localStorage` на странице `https://support.voiso.com`:
+
+```javascript
+localStorage.setItem('voiso_ai_api_key', '<YOUR_AI_API_KEY>');
+localStorage.setItem('voiso_feedback_endpoint', 'https://script.google.com/macros/s/.../exec');
+```
+
+Проверка:
+
+```javascript
+localStorage.getItem('voiso_ai_api_key');
+localStorage.getItem('voiso_feedback_endpoint');
+```
+
 ## Автообновление Tampermonkey
 
 Для автообновления нужны файлы:
