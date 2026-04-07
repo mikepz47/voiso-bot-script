@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      3.3.12
+// @version      3.3.11
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -3795,12 +3795,6 @@
                     this.requestAbortController = null;
                 }
             }
-
-            logger.info('AI raw response body', {
-                status: responseStatus,
-                content_type: responseContentType,
-                body: String(responseText || '').slice(0, 2000)
-            });
 
             const responseData = safeJsonParse(responseText);
 
