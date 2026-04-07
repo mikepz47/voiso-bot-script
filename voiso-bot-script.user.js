@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      3.3.14
+// @version      3.3.13
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -26,10 +26,6 @@
     // CONFIG - настройки интеграции AI
     // ============================================================================
     const AI_CHAT_ENDPOINT = 'https://lk01.nl.wavix.net:8444/v1/chat';
-    const AI_FALLBACK_RESPONSE_MARKERS = [
-        "i'm sorry, i couldn't find the information",
-        "please try again with a different query"
-    ];
     const AI_REQUEST_TIMEOUT_MS = 300000;
     const FEEDBACK_REQUEST_TIMEOUT_MS = 20000;
     const AI_TYPING_EFFECT_ENABLED = true;
@@ -2542,12 +2538,6 @@
             overflow-y: auto;
         }
 
-        .ai-bot-answer.ai-bot-answer-fallback {
-            background-color: #fff3cd;
-            border-left: 3px solid #ffc107;
-            color: #856404;
-        }
-
         .ai-bot-error {
             background-color: #fff3cd;
             border-left: 3px solid #ffc107;
@@ -3104,20 +3094,12 @@
             this.setRatingStatus('');
         }
 
-        isAiFallbackResponse(text) {
-            const lower = String(text || '').toLowerCase();
-            return AI_FALLBACK_RESPONSE_MARKERS.some(marker => lower.includes(marker));
-        }
-
         renderAiAnswer(answerSection, answerContent, text) {
             if (!answerSection || !answerContent) return;
 
             const answer = String(text || '');
-            const isFallback = this.isAiFallbackResponse(answer);
             answerSection.style.display = 'block';
-            // If fallback response — hide rating section, style as warning
-            this.setRatingSectionVisibility(!isFallback && answer.length > 0);
-            answerContent.classList.toggle('ai-bot-answer-fallback', isFallback);
+            this.setRatingSectionVisibility(answer.length > 0);
             this.setRatingStatus('');
             this.cachedAiAnswer = answer;
             this.lastResponseForAi = answer;
@@ -3271,13 +3253,12 @@
             const feedbackValue = String(feedback || '').trim().toLowerCase();
             const subjectValue = String(subject || '').trim();
 
-            const silent = options.silent === true;
-            if (!['good', 'not_great', 'bad', 'error'].includes(feedbackValue)) {
-                if (!silent) this.setRatingStatus('Unknown feedback value.');
+            if (feedbackValue !== 'good' && feedbackValue !== 'not_great' && feedbackValue !== 'bad') {
+                this.setRatingStatus('Unknown feedback value.');
                 return false;
             }
 
-            if ((feedbackValue === 'not_great' || feedbackValue === 'bad') && !subjectValue && !silent) {
+            if ((feedbackValue === 'not_great' || feedbackValue === 'bad') && !subjectValue) {
                 this.setRatingStatus('Please enter a subject.');
                 return false;
             }
@@ -3289,11 +3270,11 @@
 
             const payload = this.buildFeedbackPayload(feedbackValue, subjectValue, responseText);
             if (!String(payload.agent || '').trim()) {
-                if (!silent) this.setRatingStatus('Feedback cannot be sent: agent email was not found.');
+                this.setRatingStatus('Feedback cannot be sent: agent email was not found.');
                 return false;
             }
             if (!String(payload.request || '').trim()) {
-                if (!silent) this.setRatingStatus('Feedback cannot be sent: request is missing.');
+                this.setRatingStatus('Feedback cannot be sent: request is missing.');
                 return false;
             }
             if (!String(payload.response || '').trim()) {
@@ -4231,11 +4212,6 @@
 
                         this.renderAiAnswer(answerSection, answerContent, aiAnswer);
                         this.lastResponseForAi = aiAnswer;
-
-                        if (this.isAiFallbackResponse(aiAnswer)) {
-                            logger.warn('AI returned fallback response — auto-submitting error feedback');
-                            await this.submitAgentFeedback('error', 'empty', aiAnswer, { silent: true });
-                        }
                         this.saveCachedTicketState({
                             last_response: this.lastResponseForAi
                         });
@@ -4352,7 +4328,7 @@
         button.style.position = 'fixed';
         button.style.top = '30px';
         button.style.bottom = '';
-        button.style.right = '70px';
+        button.style.right = '30px';
         button.style.zIndex = '9999';
         button.style.display = 'block';
         button.style.margin = '0';
