@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      3.3.10
+// @version      3.3.11
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -3333,12 +3333,13 @@
             }
         }
 
-        buildAiRequestBody(finalPayload) {
+        buildAiRequestBody(finalPayload, apiKey = '') {
             const ticketId = String(finalPayload?.ticket_id || 'unknown');
             const contentForAi = typeof finalPayload?.content_for_ai === 'string'
                 ? finalPayload.content_for_ai
                 : '';
-            const userApiToken = getAiUserApiToken();
+            // user_api_token: explicit token if set, otherwise fall back to the Bearer API key
+            const userApiToken = getAiUserApiToken() || apiKey;
 
             const body = {
                 session_id: `voiso-ticket-${ticketId}`,
@@ -3552,7 +3553,7 @@
                 );
             }
 
-            const requestBody = this.buildAiRequestBody(finalPayload);
+            const requestBody = this.buildAiRequestBody(finalPayload, apiKey);
             const requestStartedAt = Date.now();
             const timeoutSeconds = Math.round(AI_REQUEST_TIMEOUT_MS / 1000);
             logPhase('ai_request_start', {
