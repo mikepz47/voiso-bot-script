@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      3.3.9
+// @version      3.3.8
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -3642,9 +3642,7 @@
 
                     responseStatus = Number(tmResponse?.status) || 0;
                     responseOk = responseStatus >= 200 && responseStatus < 300;
-                    // When responseType:'stream', onload delivers empty responseText —
-                    // actual data was streamed via onprogress into partialResponseText.
-                    responseText = String(tmResponse?.responseText || '') || partialResponseText;
+                    responseText = String(tmResponse?.responseText || '');
                     const tmHeaders = String(tmResponse?.responseHeaders || '');
                     const tmContentType = tmHeaders.match(/content-type:\s*([^\r\n;]+)/i);
                     responseContentType = tmContentType ? tmContentType[1].trim() : '';
