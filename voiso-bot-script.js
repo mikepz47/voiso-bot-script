@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      3.3.21
+// @version      3.3.22
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -3345,8 +3345,8 @@
                 ? finalPayload.content_for_ai
                 : '';
 
-            return {
-                session_id: `voiso-ticket-${ticketId}-${Date.now()}`,
+            const body = {
+                session_id: `voiso-ticket-${ticketId}`,
                 messages: [
                     {
                         content: { text: contentForAi },
@@ -3357,6 +3357,14 @@
                     user_api_token: apiKey || ''
                 }
             };
+
+            logger.info('AI request body', {
+                session_id: body.session_id,
+                content_length: contentForAi.length,
+                content_preview: contentForAi.slice(0, 300)
+            });
+
+            return body;
         }
 
         extractAiAnswerText(responseData) {
