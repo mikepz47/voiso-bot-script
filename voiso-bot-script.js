@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      3.3.19
+// @version      3.3.20
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -113,19 +113,6 @@
                 localStorage.getItem('voiso_feedback_endpoint') ||
                 ''
             ).trim();
-        } catch (e) {
-            return '';
-        }
-    }
-
-    function getAiUserApiToken() {
-        try {
-            return (
-                pageWindow.VOISO_USER_API_TOKEN ||
-                pageWindow.__VOISO_USER_API_TOKEN ||
-                localStorage.getItem('voiso_user_api_token') ||
-                ''
-            );
         } catch (e) {
             return '';
         }
@@ -3352,14 +3339,13 @@
             }
         }
 
-        buildAiRequestBody(finalPayload) {
+        buildAiRequestBody(finalPayload, apiKey) {
             const ticketId = String(finalPayload?.ticket_id || 'unknown');
             const contentForAi = typeof finalPayload?.content_for_ai === 'string'
                 ? finalPayload.content_for_ai
                 : '';
-            const userApiToken = getAiUserApiToken();
 
-            const body = {
+            return {
                 session_id: `voiso-ticket-${ticketId}`,
                 messages: [
                     {
@@ -3367,14 +3353,10 @@
                         direction: 'inbound'
                     }
                 ],
-                variables: {}
+                variables: {
+                    user_api_token: apiKey || ''
+                }
             };
-
-            if (userApiToken) {
-                body.variables.user_api_token = userApiToken;
-            }
-
-            return body;
         }
 
         extractAiAnswerText(responseData) {
@@ -3447,122 +3429,6 @@
             return '';
         }
 
-        createAiStreamAccumulator() {
-            return {
-                line_buffer: '',
-                accumulated_text: ''
-            };
-        }
-
-        resetAiStreamAccumulator(accumulator) {
-            if (!accumulator || typeof accumulator !== 'object') return;
-            accumulator.line_buffer = '';
-            accumulator.accumulated_text = '';
-        }
-
-        mergeAiStreamPiece(accumulator, piece) {
-            const textPiece = String(piece || '');
-            if (!textPiece || !accumulator) return;
-
-            if (!accumulator.accumulated_text) {
-                accumulator.accumulated_text = textPiece;
-                return;
-            }
-
-            if (textPiece.startsWith(accumulator.accumulated_text)) {
-                // Some backends stream full snapshots instead of token deltas.
-                accumulator.accumulated_text = textPiece;
-                return;
-            }
-
-            if (!accumulator.accumulated_text.endsWith(textPiece)) {
-                accumulator.accumulated_text += textPiece;
-            }
-        }
-
-        consumeAiStreamChunk(chunk, accumulator, options = {}) {
-            if (!accumulator || typeof accumulator !== 'object') return '';
-
-            const flush = options.flush === true;
-            const chunkText = String(chunk || '');
-            if (!chunkText && !flush) {
-                return String(accumulator.accumulated_text || '');
-            }
-
-            accumulator.line_buffer += chunkText;
-            const lines = accumulator.line_buffer.split(/\r?\n/);
-
-            if (flush) {
-                accumulator.line_buffer = '';
-            } else {
-                accumulator.line_buffer = lines.pop() || '';
-            }
-
-            for (const line of lines) {
-                const trimmed = String(line || '').trim();
-                if (!trimmed) continue;
-
-                const payload = trimmed.startsWith('data:')
-                    ? trimmed.replace(/^data:\s*/, '')
-                    : trimmed;
-
-                if (!payload || payload === '[DONE]') continue;
-
-                const parsed = safeJsonParse(payload);
-                if (!parsed) continue;
-
-                const piece = this.extractAiAnswerText(parsed);
-                this.mergeAiStreamPiece(accumulator, piece);
-            }
-
-            return String(accumulator.accumulated_text || '');
-        }
-
-        extractAiAnswerTextFromRawResponse(rawResponseText) {
-            const raw = String(rawResponseText || '').trim();
-            if (!raw) return '';
-
-            const directParsed = safeJsonParse(raw);
-            if (directParsed) {
-                return this.extractAiAnswerText(directParsed);
-            }
-
-            const lines = raw.split(/\r?\n/);
-            let streamAccumulatedText = '';
-
-            for (const line of lines) {
-                const trimmed = line.trim();
-                if (!trimmed) continue;
-
-                const payload = trimmed.startsWith('data:')
-                    ? trimmed.replace(/^data:\s*/, '')
-                    : trimmed;
-
-                if (!payload || payload === '[DONE]') continue;
-
-                const parsed = safeJsonParse(payload);
-                if (!parsed) continue;
-
-                const piece = this.extractAiAnswerText(parsed);
-                if (piece) {
-                    if (!streamAccumulatedText) {
-                        streamAccumulatedText = piece;
-                    } else if (piece.startsWith(streamAccumulatedText)) {
-                        // Some backends stream full snapshots instead of token deltas.
-                        streamAccumulatedText = piece;
-                    } else if (!streamAccumulatedText.endsWith(piece)) {
-                        streamAccumulatedText += piece;
-                    }
-                }
-            }
-
-            if (streamAccumulatedText.trim()) {
-                return streamAccumulatedText.trim();
-            }
-
-            return '';
-        }
-
         async requestAiAnswer(finalPayload) {
             const apiKey = getAiApiKey();
             if (!apiKey) {
@@ -3571,7 +3437,7 @@
                 );
             }
 
-            const requestBody = this.buildAiRequestBody(finalPayload);
+            const requestBody = this.buildAiRequestBody(finalPayload, apiKey);
             const requestStartedAt = Date.now();
             const timeoutSeconds = Math.round(AI_REQUEST_TIMEOUT_MS / 1000);
             logPhase('ai_request_start', {
@@ -3580,22 +3446,13 @@
             });
             logger.info('AI request started', {
                 endpoint: AI_CHAT_ENDPOINT,
-                session_id: requestBody.session_id,
-                has_user_api_token: Boolean(requestBody.variables.user_api_token)
+                session_id: requestBody.session_id
             });
 
             const headers = {
                 Authorization: `Bearer ${apiKey}`,
                 'Content-Type': 'application/json'
             };
-
-            const curlCommand = [
-                `curl -X POST '${AI_CHAT_ENDPOINT}'`,
-                `  -H 'Authorization: Bearer ${apiKey}'`,
-                `  -H 'Content-Type: application/json'`,
-                `  --data-raw '${JSON.stringify(requestBody).replace(/'/g, "'\\''")}'`
-            ].join(' \\\n');
-            logger.info('AI request CURL equivalent:\n' + curlCommand);
 
             let responseStatus = 0;
             let responseOk = false;
@@ -3606,10 +3463,6 @@
 
             if (tmRequestFn) {
                 try {
-                    let partialResponseText = '';
-                    let partialAnswer = '';
-                    let processedProgressLength = 0;
-                    const streamAccumulator = this.createAiStreamAccumulator();
                     const tmResponse = await new Promise((resolve, reject) => {
                         const requestHandle = tmRequestFn({
                             method: 'POST',
@@ -3625,40 +3478,14 @@
                                     error: String(err?.error || ''),
                                     responseText: String(err?.responseText || '').slice(0, 300)
                                 });
-                                const errMsg = String(err?.error || err?.statusText || 'unknown');
-                                reject(new Error('Network error: ' + errMsg));
-                            },
-                            onprogress: event => {
-                                const nextResponseText = String(event?.responseText || partialResponseText || '');
-                                if (!nextResponseText) return;
-
-                                if (nextResponseText.length < processedProgressLength) {
-                                    processedProgressLength = 0;
-                                    this.resetAiStreamAccumulator(streamAccumulator);
-                                }
-
-                                const deltaChunk = nextResponseText.slice(processedProgressLength);
-                                processedProgressLength = nextResponseText.length;
-                                partialResponseText = nextResponseText;
-
-                                if (!deltaChunk) return;
-                                const incrementalAnswer = normalizeAiAnswerFormatting(
-                                    this.consumeAiStreamChunk(deltaChunk, streamAccumulator)
-                                );
-                                if (incrementalAnswer) {
-                                    partialAnswer = incrementalAnswer;
-                                }
+                                reject(new Error('Network error: ' + String(err?.error || err?.statusText || 'unknown')));
                             },
                             ontimeout: () => {
-                                const elapsed = Date.now() - requestStartedAt;
                                 logger.error('GM_xmlhttpRequest ontimeout', {
-                                    elapsed_ms: elapsed,
+                                    elapsed_ms: Date.now() - requestStartedAt,
                                     timeout_ms: AI_REQUEST_TIMEOUT_MS
                                 });
-                                const timeoutError = new Error('timeout');
-                                timeoutError.partial_response_text = partialResponseText;
-                                timeoutError.partial_answer = partialAnswer;
-                                reject(timeoutError);
+                                reject(new Error('timeout'));
                             },
                             onabort: () => reject(new Error('aborted'))
                         });
@@ -3668,45 +3495,16 @@
 
                     responseStatus = Number(tmResponse?.status) || 0;
                     responseOk = responseStatus >= 200 && responseStatus < 300;
-                    responseText = String(tmResponse?.responseText || '') || partialResponseText;
-                    const tmHeaders = String(tmResponse?.responseHeaders || '');
-                    const tmContentType = tmHeaders.match(/content-type:\s*([^\r\n;]+)/i);
+                    responseText = String(tmResponse?.responseText || '');
+                    const tmContentType = String(tmResponse?.responseHeaders || '').match(/content-type:\s*([^\r\n;]+)/i);
                     responseContentType = tmContentType ? tmContentType[1].trim() : '';
                 } catch (error) {
-                    if (error && (error.message === 'timeout' || error.name === 'timeout')) {
-                        const partialResponseText = String(error?.partial_response_text || '');
-                        const fallbackAnswer = normalizeAiAnswerFormatting(
-                            String(error?.partial_answer || '') ||
-                            this.extractAiAnswerTextFromRawResponse(partialResponseText)
-                        );
-                        const elapsedMs = Date.now() - requestStartedAt;
-
-                        logger.error('AI request timed out', {
-                            session_id: requestBody.session_id,
-                            elapsed_ms: elapsedMs,
-                            status: responseStatus,
-                            response_text_length: partialResponseText.length
-                        });
-
-                        if (fallbackAnswer) {
-                            logger.warn('Timeout reached but answer was recovered from partial response', {
-                                session_id: requestBody.session_id,
-                                answer_length: fallbackAnswer.length
-                            });
-                            logPhase('ai_request_success', {
-                                session_id: requestBody.session_id,
-                                answer_length: fallbackAnswer.length,
-                                recovered_after_timeout: true
-                            });
-                            return fallbackAnswer;
-                        }
-
+                    if (error && error.message === 'timeout') {
                         throw new Error(`AI request timed out after ${timeoutSeconds} seconds.`);
                     }
                     if (error && (error.message === 'aborted' || error.name === 'AbortError')) {
                         throw new Error('The AI request was cancelled.');
                     }
-                    // Preserve network error details from onerror handler
                     if (error && error.message && error.message.startsWith('Network error:')) {
                         throw error;
                     }
@@ -3718,9 +3516,6 @@
                 const controller = new AbortController();
                 this.requestAbortController = controller;
                 const timeoutId = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
-                let partialResponseText = '';
-                let partialAnswer = '';
-                const streamAccumulator = this.createAiStreamAccumulator();
 
                 try {
                     const response = await originalFetch(AI_CHAT_ENDPOINT, {
@@ -3733,75 +3528,9 @@
                     responseStatus = response.status;
                     responseOk = response.ok;
                     responseContentType = String(response.headers?.get('content-type') || '');
-
-                    if (response.body && typeof response.body.getReader === 'function') {
-                        const reader = response.body.getReader();
-                        const decoder = new TextDecoder();
-
-                        while (true) {
-                            const { done, value } = await reader.read();
-                            if (done) break;
-
-                            const decodedChunk = decoder.decode(value, { stream: true });
-                            partialResponseText += decodedChunk;
-                            const incrementalAnswer = normalizeAiAnswerFormatting(
-                                this.consumeAiStreamChunk(decodedChunk, streamAccumulator)
-                            );
-                            if (incrementalAnswer) {
-                                partialAnswer = incrementalAnswer;
-                            }
-                        }
-
-                        const trailingChunk = decoder.decode();
-                        if (trailingChunk) {
-                            partialResponseText += trailingChunk;
-                            const trailingAnswer = normalizeAiAnswerFormatting(
-                                this.consumeAiStreamChunk(trailingChunk, streamAccumulator)
-                            );
-                            if (trailingAnswer) {
-                                partialAnswer = trailingAnswer;
-                            }
-                        }
-
-                        const flushedAnswer = normalizeAiAnswerFormatting(
-                            this.consumeAiStreamChunk('', streamAccumulator, { flush: true })
-                        );
-                        if (flushedAnswer) {
-                            partialAnswer = flushedAnswer;
-                        }
-
-                        responseText = partialResponseText;
-                    } else {
-                        responseText = await response.text();
-                    }
+                    responseText = await response.text();
                 } catch (error) {
                     if (error && error.name === 'AbortError') {
-                        const fallbackAnswer = normalizeAiAnswerFormatting(
-                            partialAnswer ||
-                            this.extractAiAnswerTextFromRawResponse(partialResponseText)
-                        );
-                        const elapsedMs = Date.now() - requestStartedAt;
-
-                        logger.error('AI request timed out', {
-                            session_id: requestBody.session_id,
-                            elapsed_ms: elapsedMs,
-                            status: responseStatus,
-                            response_text_length: partialResponseText.length
-                        });
-
-                        if (fallbackAnswer) {
-                            logger.warn('Timeout reached but answer was recovered from partial stream', {
-                                session_id: requestBody.session_id,
-                                answer_length: fallbackAnswer.length
-                            });
-                            logPhase('ai_request_success', {
-                                session_id: requestBody.session_id,
-                                answer_length: fallbackAnswer.length,
-                                recovered_after_timeout: true
-                            });
-                            return fallbackAnswer;
-                        }
-
                         throw new Error(`AI request timed out after ${timeoutSeconds} seconds.`);
                     }
                     throw new Error('Network error while requesting AI (possible CORS issue or unreachable endpoint).');
@@ -3825,7 +3554,6 @@
                     responseData?.error,
                     responseData?.message,
                     responseData?.detail,
-                    this.extractAiAnswerTextFromRawResponse(responseText),
                     responseText
                 ]);
 
@@ -3837,8 +3565,7 @@
             }
 
             const aiAnswer = normalizeAiAnswerFormatting(
-                this.extractAiAnswerText(responseData) ||
-                this.extractAiAnswerTextFromRawResponse(responseText)
+                this.extractAiAnswerText(responseData)
             );
             if (!aiAnswer) {
                 logger.error('AI returned empty answer — raw response', {
