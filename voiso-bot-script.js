@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      3.3.5
+// @version      3.3.6
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -2004,9 +2004,16 @@
     function findLastAgentEmail(normalizedEvents) {
         if (!Array.isArray(normalizedEvents) || normalizedEvents.length === 0) return '';
 
+        // Ensure ascending order by timestamp so iterating backward gives the latest event.
+        const sorted = [...normalizedEvents].sort((a, b) => {
+            const aMs = Number.isFinite(a.timestamp_ms) ? a.timestamp_ms : 0;
+            const bMs = Number.isFinite(b.timestamp_ms) ? b.timestamp_ms : 0;
+            return aMs - bMs;
+        });
+
         // Prefer the latest real chat-like message from known agent email.
-        for (let i = normalizedEvents.length - 1; i >= 0; i--) {
-            const event = normalizedEvents[i];
+        for (let i = sorted.length - 1; i >= 0; i--) {
+            const event = sorted[i];
             const email = normalizeEmail(event?.email);
             if (!email || !isAgentEmail(email)) continue;
             const text = String(event?.text || '').trim();
@@ -2016,8 +2023,8 @@
         }
 
         // Fallback: latest agent event with email.
-        for (let i = normalizedEvents.length - 1; i >= 0; i--) {
-            const email = normalizeEmail(normalizedEvents[i]?.email);
+        for (let i = sorted.length - 1; i >= 0; i--) {
+            const email = normalizeEmail(sorted[i]?.email);
             if (email && isAgentEmail(email)) return email;
         }
 
@@ -2731,6 +2738,12 @@
 
         #ai-bot-inject-button.ai-bot-help-loading {
             background: #0d6efd;
+            animation: ai-bot-pulse 1.2s ease-in-out infinite;
+        }
+
+        @keyframes ai-bot-pulse {
+            0%, 100% { opacity: 1; }
+            50%       { opacity: 0.5; }
         }
 
         .ai-bot-loading-section {
@@ -2766,17 +2779,6 @@
     let aiHelpButtonCurrentState = AI_HELP_BUTTON_STATE.IDLE;
     let aiHelpButtonResetTimer = null;
     let aiHelpButtonMotionRafId = null;
-    let aiHelpButtonMotionStartTs = 0;
-    let aiHelpButtonMotionLastTs = 0;
-    let aiHelpButtonMotionSpinDeg = 0;
-    const AI_HELP_BUTTON_RAINBOW_CYCLE_MS = 900;
-    const AI_HELP_BUTTON_SPIN_ACCEL_INTERVAL_MS = 100;
-    const AI_HELP_BUTTON_SPIN_BASE_DEG_PER_SEC = 45;
-    const AI_HELP_BUTTON_SPIN_ACCEL_STEP_DEG_PER_SEC = 7;
-    const AI_HELP_BUTTON_SPIN_MAX_DEG_PER_SEC = 2520;
-    const AI_HELP_BUTTON_CHASE_START_MS = 20000;
-    const AI_HELP_BUTTON_CHASE_SWEEP_CYCLE_MS = 850;
-    const AI_HELP_BUTTON_CHASE_SIDE_PADDING_PX = 30;
 
     function logPhase(phase, data = {}) {
         logger.info(phase, data);
@@ -2798,106 +2800,19 @@
             cancelAnimationFrame(aiHelpButtonMotionRafId);
             aiHelpButtonMotionRafId = null;
         }
-        aiHelpButtonMotionStartTs = 0;
-        aiHelpButtonMotionLastTs = 0;
-        aiHelpButtonMotionSpinDeg = 0;
     }
 
     function stopAiHelpButtonMotion(button = getAiHelpButtonElement()) {
         clearAiHelpButtonMotionFrame();
         if (!button) return;
-
         button.removeAttribute('data-ai-bot-motion');
-        button.style.willChange = '';
-        button.style.transform = '';
-        button.style.transformOrigin = '';
-        button.style.filter = '';
-        button.style.backgroundColor = '';
-        button.style.borderColor = '';
-        button.style.color = '';
-        button.style.transition = '';
-        button.style.boxShadow = '';
-        button.style.left = '';
-        button.style.top = '';
-        button.style.right = '30px';
-        button.style.bottom = '30px';
-        button.style.position = 'fixed';
-        button.style.margin = '0';
     }
 
     function startAiHelpButtonMotion(button) {
         if (!button) return;
-        if (button.getAttribute('data-ai-bot-motion') === 'active' && aiHelpButtonMotionRafId) return;
-
-        stopAiHelpButtonMotion(button);
-
+        // Pulse animation is handled entirely via CSS @keyframes ai-bot-pulse.
+        // No JS animation loop needed.
         button.setAttribute('data-ai-bot-motion', 'active');
-        button.style.position = 'fixed';
-        button.style.bottom = '30px';
-        button.style.right = '30px';
-        button.style.left = '';
-        button.style.top = '';
-        button.style.margin = '0';
-        button.style.transform = 'rotate(0deg)';
-        button.style.transformOrigin = 'center center';
-        button.style.transition = 'none';
-        button.style.willChange = 'transform, background-color, border-color, box-shadow, filter';
-
-        const animate = (timestamp) => {
-            if (!button.isConnected || aiHelpButtonCurrentState !== AI_HELP_BUTTON_STATE.LOADING) {
-                stopAiHelpButtonMotion(button);
-                return;
-            }
-
-            if (!aiHelpButtonMotionStartTs) {
-                aiHelpButtonMotionStartTs = timestamp;
-                aiHelpButtonMotionLastTs = timestamp;
-            }
-
-            const elapsed = timestamp - aiHelpButtonMotionStartTs;
-            const deltaMs = Math.max(0, timestamp - aiHelpButtonMotionLastTs);
-            aiHelpButtonMotionLastTs = timestamp;
-
-            const accelSteps = Math.floor(elapsed / AI_HELP_BUTTON_SPIN_ACCEL_INTERVAL_MS);
-            const spinSpeedDegPerSec = Math.min(
-                AI_HELP_BUTTON_SPIN_MAX_DEG_PER_SEC,
-                AI_HELP_BUTTON_SPIN_BASE_DEG_PER_SEC + accelSteps * AI_HELP_BUTTON_SPIN_ACCEL_STEP_DEG_PER_SEC
-            );
-
-            aiHelpButtonMotionSpinDeg = (
-                aiHelpButtonMotionSpinDeg + (spinSpeedDegPerSec * deltaMs) / 1000
-            ) % 360;
-
-            const hue = ((elapsed % AI_HELP_BUTTON_RAINBOW_CYCLE_MS) / AI_HELP_BUTTON_RAINBOW_CYCLE_MS) * 360;
-            const borderHue = (hue + 36) % 360;
-            const glowHue = (hue + 72) % 360;
-            const chaseElapsed = elapsed - AI_HELP_BUTTON_CHASE_START_MS;
-
-            let sweepTranslateX = 0;
-            if (chaseElapsed >= 0) {
-                const viewportWidth = Math.max(
-                    Number(window.innerWidth) || 0,
-                    Number(document.documentElement?.clientWidth) || 0
-                );
-                const buttonWidth = Math.max(Number(button.offsetWidth) || 0, 108);
-                const sidePadding = AI_HELP_BUTTON_CHASE_SIDE_PADDING_PX;
-                const sweepRange = Math.max(0, viewportWidth - buttonWidth - sidePadding * 2);
-                const sweepPhase = (chaseElapsed % AI_HELP_BUTTON_CHASE_SWEEP_CYCLE_MS) / AI_HELP_BUTTON_CHASE_SWEEP_CYCLE_MS;
-                // Start from the right and quickly sweep to the left.
-                sweepTranslateX = -sweepRange * sweepPhase;
-            }
-
-            button.style.backgroundColor = `hsl(${hue.toFixed(1)}, 100%, 52%)`;
-            button.style.borderColor = `hsl(${borderHue.toFixed(1)}, 100%, 42%)`;
-            button.style.color = '#ffffff';
-            button.style.filter = 'saturate(1.35) contrast(1.1)';
-            button.style.boxShadow = `0 0 0 1px rgba(255,255,255,0.14), 0 0 18px hsla(${glowHue.toFixed(1)}, 100%, 58%, 0.92)`;
-            button.style.transform = `translateX(${sweepTranslateX.toFixed(2)}px) rotate(${aiHelpButtonMotionSpinDeg.toFixed(2)}deg)`;
-
-            aiHelpButtonMotionRafId = requestAnimationFrame(animate);
-        };
-
-        aiHelpButtonMotionRafId = requestAnimationFrame(animate);
     }
 
     function renderAiHelpButtonState(button, state) {
@@ -3029,9 +2944,11 @@
             this.lastResponseForAi = (hasCachedState && typeof cached.last_response === 'string')
                 ? cached.last_response
                 : this.cachedAiAnswer;
+            // Always prefer fresh agent email derived from live normalized events.
+            // Cache is only used as a last resort when live data yields nothing.
             const incomingAgentEmail = normalizeEmail(
-                data?.last_agent_email ||
-                findLastAgentEmail(data?.normalized_events)
+                findLastAgentEmail(data?.normalized_events) ||
+                data?.last_agent_email
             );
             this.lastAgentEmail = incomingAgentEmail || (
                 hasCachedState && typeof cached.last_agent_email === 'string'
@@ -4370,7 +4287,8 @@
         }
 
         button.style.position = 'fixed';
-        button.style.bottom = '30px';
+        button.style.top = '30px';
+        button.style.bottom = '';
         button.style.right = '30px';
         button.style.zIndex = '9999';
         button.style.display = 'block';
