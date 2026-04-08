@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      3.3.20
+// @version      3.3.21
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -3346,7 +3346,7 @@
                 : '';
 
             return {
-                session_id: `voiso-ticket-${ticketId}`,
+                session_id: `voiso-ticket-${ticketId}-${Date.now()}`,
                 messages: [
                     {
                         content: { text: contentForAi },
