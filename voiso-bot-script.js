@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      3.3.7
+// @version      3.3.8
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -3809,6 +3809,12 @@
                 this.extractAiAnswerTextFromRawResponse(responseText)
             );
             if (!aiAnswer) {
+                logger.error('AI returned empty answer — raw response', {
+                    session_id: requestBody.session_id,
+                    status: responseStatus,
+                    content_type: responseContentType,
+                    response_text: String(responseText || '').slice(0, 1000)
+                });
                 throw new Error('AI returned an empty answer.');
             }
 
