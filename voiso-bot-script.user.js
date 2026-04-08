@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      3.3.6
+// @version      3.3.7
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -26,7 +26,7 @@
     // CONFIG - настройки интеграции AI
     // ============================================================================
     const AI_CHAT_ENDPOINT = 'https://lk01.nl.wavix.net:8444/v1/chat';
-    const AI_REQUEST_TIMEOUT_MS = 120000;
+    const AI_REQUEST_TIMEOUT_MS = 300000;
     const FEEDBACK_REQUEST_TIMEOUT_MS = 20000;
     const AI_TYPING_EFFECT_ENABLED = true;
     const AI_TYPING_EFFECT_MAX_CHARS = 3000;
@@ -3590,8 +3590,18 @@
                             headers,
                             data: JSON.stringify(requestBody),
                             timeout: AI_REQUEST_TIMEOUT_MS,
+                            responseType: 'stream',
                             onload: resolve,
-                            onerror: reject,
+                            onerror: (err) => {
+                                logger.error('GM_xmlhttpRequest onerror', {
+                                    status: err?.status,
+                                    statusText: err?.statusText,
+                                    error: String(err?.error || ''),
+                                    responseText: String(err?.responseText || '').slice(0, 300)
+                                });
+                                const errMsg = String(err?.error || err?.statusText || 'unknown');
+                                reject(new Error('Network error: ' + errMsg));
+                            },
                             onprogress: event => {
                                 const nextResponseText = String(event?.responseText || partialResponseText || '');
                                 if (!nextResponseText) return;
@@ -3614,6 +3624,11 @@
                                 }
                             },
                             ontimeout: () => {
+                                const elapsed = Date.now() - requestStartedAt;
+                                logger.error('GM_xmlhttpRequest ontimeout', {
+                                    elapsed_ms: elapsed,
+                                    timeout_ms: AI_REQUEST_TIMEOUT_MS
+                                });
                                 const timeoutError = new Error('timeout');
                                 timeoutError.partial_response_text = partialResponseText;
                                 timeoutError.partial_answer = partialAnswer;
@@ -3664,6 +3679,10 @@
                     }
                     if (error && (error.message === 'aborted' || error.name === 'AbortError')) {
                         throw new Error('The AI request was cancelled.');
+                    }
+                    // Preserve network error details from onerror handler
+                    if (error && error.message && error.message.startsWith('Network error:')) {
+                        throw error;
                     }
                     throw new Error('Network error while requesting AI (endpoint may be unavailable).');
                 } finally {
