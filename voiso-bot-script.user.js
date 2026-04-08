@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      3.3.9
+// @version      3.3.10
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -3569,6 +3569,14 @@
                 Authorization: `Bearer ${apiKey}`,
                 'Content-Type': 'application/json'
             };
+
+            const curlCommand = [
+                `curl -X POST '${AI_CHAT_ENDPOINT}'`,
+                `  -H 'Authorization: Bearer ${apiKey}'`,
+                `  -H 'Content-Type: application/json'`,
+                `  --data-raw '${JSON.stringify(requestBody).replace(/'/g, "'\\''")}'`
+            ].join(' \\\n');
+            logger.info('AI request CURL equivalent:\n' + curlCommand);
 
             let responseStatus = 0;
             let responseOk = false;
