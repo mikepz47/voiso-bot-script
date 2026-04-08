@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      3.3.13
+// @version      3.3.12
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -3599,6 +3599,7 @@
                             headers,
                             data: JSON.stringify(requestBody),
                             timeout: AI_REQUEST_TIMEOUT_MS,
+                            responseType: 'stream',
                             onload: resolve,
                             onerror: (err) => {
                                 logger.error('GM_xmlhttpRequest onerror', {
@@ -3650,6 +3651,8 @@
 
                     responseStatus = Number(tmResponse?.status) || 0;
                     responseOk = responseStatus >= 200 && responseStatus < 300;
+                    // When responseType:'stream', onload delivers empty responseText —
+                    // actual data was streamed via onprogress into partialResponseText.
                     responseText = String(tmResponse?.responseText || '') || partialResponseText;
                     const tmHeaders = String(tmResponse?.responseHeaders || '');
                     const tmContentType = tmHeaders.match(/content-type:\s*([^\r\n;]+)/i);
