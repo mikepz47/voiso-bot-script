@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      4.0.0
+// @version      4.0.1
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -4054,7 +4054,7 @@
 
         if (!button.dataset.aiBotBound) {
             button.dataset.aiBotBound = '1';
-            button.addEventListener('click', () => {
+            button.addEventListener('click', async () => {
                 if (aiHelpButtonCurrentState === AI_HELP_BUTTON_STATE.LOADING) {
                     return;
                 }
@@ -4062,7 +4062,22 @@
                 logPhase('button_clicked', {
                     ticket_id: getCurrentTicketIdFromLocation()
                 });
-                const previewData = collectPreviewData();
+
+                let previewData = collectPreviewData();
+
+                // Race condition guard: if ticket data not intercepted yet, retry a few times
+                if (!previewData.success && previewData.error === 'Unable to load ticket data.') {
+                    setAiHelpButtonState(AI_HELP_BUTTON_STATE.LOADING);
+                    for (let i = 0; i < 3; i++) {
+                        await new Promise(resolve => setTimeout(resolve, 700));
+                        previewData = collectPreviewData();
+                        if (previewData.success || previewData.warning) break;
+                    }
+                    if (aiHelpButtonCurrentState === AI_HELP_BUTTON_STATE.LOADING) {
+                        setAiHelpButtonState(AI_HELP_BUTTON_STATE.IDLE);
+                    }
+                }
+
                 modal.create(previewData);
             });
         }
