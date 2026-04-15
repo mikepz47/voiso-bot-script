@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      4.0.1
+// @version      4.0.2
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -3648,6 +3648,7 @@
                     </div>
                     <div id="ai-bot-modal-footer">
                         <button class="ai-bot-button" id="ai-bot-close-btn">Close</button>
+                        ${data.error === 'Unable to load ticket data.' ? '<button class="ai-bot-button ai-bot-button-primary" id="ai-bot-retry-data-btn">Try Again</button>' : ''}
                     </div>
                 `;
             }
@@ -3790,6 +3791,23 @@
             const closeFooterBtn = document.getElementById('ai-bot-close-btn');
             if (closeFooterBtn) {
                 closeFooterBtn.addEventListener('click', () => this.close());
+            }
+
+            const retryDataBtn = document.getElementById('ai-bot-retry-data-btn');
+            if (retryDataBtn) {
+                retryDataBtn.addEventListener('click', async () => {
+                    retryDataBtn.disabled = true;
+                    retryDataBtn.textContent = 'Loading...';
+                    let newData = collectPreviewData();
+                    if (!newData.success && newData.error === 'Unable to load ticket data.') {
+                        for (let i = 0; i < 5; i++) {
+                            await new Promise(resolve => setTimeout(resolve, 1000));
+                            newData = collectPreviewData();
+                            if (newData.success || newData.warning) break;
+                        }
+                    }
+                    this.create(newData);
+                });
             }
 
             if (!this.data?.success) return;
@@ -4068,8 +4086,8 @@
                 // Race condition guard: if ticket data not intercepted yet, retry a few times
                 if (!previewData.success && previewData.error === 'Unable to load ticket data.') {
                     setAiHelpButtonState(AI_HELP_BUTTON_STATE.LOADING);
-                    for (let i = 0; i < 3; i++) {
-                        await new Promise(resolve => setTimeout(resolve, 700));
+                    for (let i = 0; i < 5; i++) {
+                        await new Promise(resolve => setTimeout(resolve, 1000));
                         previewData = collectPreviewData();
                         if (previewData.success || previewData.warning) break;
                     }
