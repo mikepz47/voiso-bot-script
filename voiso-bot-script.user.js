@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      4.0.5
+// @version      4.0.6
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -2822,6 +2822,22 @@
     let aiHelpButtonResetTimer = null;
     let aiHelpButtonMotionRafId = null;
 
+    async function fetchTicketDataDirectly(ticketId) {
+        if (!ticketId) return;
+        const url = `https://support.voiso.com/api/internal/tickets/${ticketId}`;
+        try {
+            const response = await originalFetch(url, { headers: { 'Accept': 'application/json' } });
+            if (!response.ok) return;
+            const data = safeJsonParse(await response.text());
+            if (data && shouldStoreInterceptedPayload(data)) {
+                logger.log('📥 Direct ticket fetch succeeded:', url);
+                storeInterceptedApiData(data, url);
+            }
+        } catch(e) {
+            logger.warn('Direct ticket fetch failed', String(e?.message || e));
+        }
+    }
+
     function logPhase(phase, data = {}) {
         logger.info(phase, data);
     }
@@ -4128,9 +4144,19 @@
 
                 let previewData = collectPreviewData();
 
-                // Race condition guard: if ticket data not intercepted yet, retry a few times
+                // Если данных нет — сначала пробуем прямой fetch к API тикета.
+                // Это покрывает случай когда SPA берёт данные из SW-кэша и не делает fetch сам.
                 if (!previewData.success && previewData.error === 'Unable to load ticket data.') {
                     setAiHelpButtonState(AI_HELP_BUTTON_STATE.LOADING);
+                    const ticketId = getCurrentTicketIdFromLocation();
+                    if (ticketId) {
+                        await fetchTicketDataDirectly(ticketId);
+                        previewData = collectPreviewData();
+                    }
+                }
+
+                // Race condition guard: если прямой fetch тоже не помог — ждём и повторяем
+                if (!previewData.success && previewData.error === 'Unable to load ticket data.') {
                     for (let i = 0; i < 5; i++) {
                         await new Promise(resolve => setTimeout(resolve, 1000));
                         previewData = collectPreviewData();
