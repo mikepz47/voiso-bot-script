@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      4.0.4
+// @version      4.0.5
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -455,6 +455,7 @@
         const candidates = [
             data.ticket_id,
             data.ticketId,
+            data.data?.id,
             data.data?.attributes?.ticket_id,
             data.data?.attributes?.ticketId,
             data.data?.ticket?.ticket_id,
@@ -495,10 +496,13 @@
         const requestTicketId = extractTicketIdFromUrl(requestUrl);
         const effectiveTicketId = payloadTicketId || requestTicketId || currentTicketId;
 
-        if (currentTicketId && effectiveTicketId && currentTicketId !== effectiveTicketId) {
+        // Проверяем мисматч только по ID из самого payload.
+        // Request URL может прийти раньше чем SPA обновит адресную строку (race condition),
+        // поэтому requestTicketId для отклонения не используем.
+        if (payloadTicketId && currentTicketId && payloadTicketId !== currentTicketId) {
             logger.warn('Skip intercepted payload from another ticket', {
                 current_ticket_id: currentTicketId,
-                intercepted_ticket_id: effectiveTicketId,
+                intercepted_ticket_id: payloadTicketId,
                 source_url: requestUrl || ''
             });
             return;
