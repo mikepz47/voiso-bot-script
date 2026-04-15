@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      4.0.2
+// @version      4.0.3
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -231,6 +231,43 @@
             return response;
         });
     };
+
+    // ============================================================================
+    // XHR INTERCEPTOR - fallback для случаев когда fetch не перехватывается
+    // ============================================================================
+    (function() {
+        const OriginalXHR = pageWindow.XMLHttpRequest;
+        if (!OriginalXHR) return;
+
+        function PatchedXHR() {
+            const xhr = new OriginalXHR();
+            let xhrUrl = '';
+
+            const originalOpen = xhr.open.bind(xhr);
+            xhr.open = function(method, url, ...rest) {
+                xhrUrl = String(url || '');
+                return originalOpen(method, url, ...rest);
+            };
+
+            xhr.addEventListener('load', function() {
+                try {
+                    if (!xhrUrl || xhrUrl.includes(AI_CHAT_ENDPOINT)) return;
+                    const contentType = String(xhr.getResponseHeader('content-type') || '');
+                    if (!isJsonContentType(contentType)) return;
+                    const data = safeJsonParse(xhr.responseText);
+                    if (data && shouldStoreInterceptedPayload(data)) {
+                        console.log('[VOISO BOT] 🎯 XHR DATA INTERCEPTED from:', xhrUrl);
+                        storeInterceptedApiData(data, xhrUrl);
+                    }
+                } catch(e) {}
+            });
+
+            return xhr;
+        }
+
+        PatchedXHR.prototype = OriginalXHR.prototype;
+        pageWindow.XMLHttpRequest = PatchedXHR;
+    })();
 
     // ============================================================================
     // LOGGER - удобное логирование
