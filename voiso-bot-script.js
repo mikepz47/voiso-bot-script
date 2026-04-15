@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      4.0.3
+// @version      4.0.4
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -200,6 +200,7 @@
     // ============================================================================
     // API INTERCEPTOR - Перехватываем fetch запросы и сохраняем данные
     // ============================================================================
+
     const originalFetch = pageWindow.fetch
         ? pageWindow.fetch.bind(pageWindow)
         : window.fetch.bind(window);
@@ -213,6 +214,7 @@
 
         return originalFetch(...args).then(response => {
             const contentType = String(response.headers?.get('content-type') || '');
+            console.info('[VOISO BOT] 📡 fetch response:', requestUrl.slice(0, 120), '|', response.status, '|', contentType.slice(0, 60));
             if (!isJsonContentType(contentType)) {
                 return response;
             }
@@ -224,6 +226,8 @@
                         if (shouldStoreInterceptedPayload(data)) {
                             console.log('[VOISO BOT] 🎯 API DATA INTERCEPTED from:', requestUrl || args[0]);
                             storeInterceptedApiData(data, requestUrl);
+                        } else {
+                            console.info('[VOISO BOT] 📭 JSON response skipped (no ticket data):', requestUrl.slice(0, 120));
                         }
                     } catch(e) {}
                 })
