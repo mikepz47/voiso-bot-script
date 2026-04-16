@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      4.0.8
+// @version      4.1.0
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -26,6 +26,7 @@
     // CONFIG - настройки интеграции AI
     // ============================================================================
     const AI_CHAT_ENDPOINT = 'https://lk01.nl.wavix.net:8444/v1/chat';
+    const AI_COMPACT_WIDGET_ID = 'ai-bot-compact-widget';
     const AI_FALLBACK_RESPONSE_MARKERS = [
         "i'm sorry, i couldn't find the information",
         "please try again with a different query"
@@ -2805,6 +2806,103 @@
             color: #334155;
         }
 
+        /* Compact rating widget */
+        #ai-bot-compact-widget {
+            position: fixed;
+            top: 68px;
+            right: 70px;
+            z-index: 9998;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.13);
+            padding: 10px 14px 10px;
+            min-width: 190px;
+            font-family: inherit;
+            font-size: 13px;
+        }
+
+        .ai-compact-title {
+            font-weight: 600;
+            color: #1e293b;
+            margin-bottom: 8px;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .ai-compact-buttons {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 0;
+        }
+
+        .ai-compact-btn {
+            flex: 1;
+            border: 1px solid #e2e8f0;
+            background: #f8fafc;
+            border-radius: 6px;
+            padding: 5px 0;
+            font-size: 18px;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+            line-height: 1;
+        }
+
+        .ai-compact-btn:hover {
+            background: #e0e7ff;
+            border-color: #818cf8;
+        }
+
+        .ai-compact-btn.ai-compact-btn-selected {
+            background: #e0e7ff;
+            border-color: #6366f1;
+        }
+
+        .ai-compact-subject-row {
+            display: none;
+            flex-direction: column;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        .ai-compact-subject-input {
+            width: 100%;
+            box-sizing: border-box;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 5px 8px;
+            font-size: 12px;
+            outline: none;
+        }
+
+        .ai-compact-subject-input:focus {
+            border-color: #6366f1;
+        }
+
+        .ai-compact-submit-btn {
+            background: #6366f1;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            padding: 5px 10px;
+            font-size: 12px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .ai-compact-submit-btn:disabled {
+            background: #c7d2fe;
+            cursor: not-allowed;
+        }
+
+        .ai-compact-status {
+            margin-top: 8px;
+            font-size: 12px;
+            color: #6366f1;
+            font-weight: 500;
+        }
+
     `;
 
     const AI_HELP_BUTTON_ID = 'ai-bot-inject-button';
@@ -2972,7 +3070,12 @@
                 subject: '',
                 last_request: '',
                 last_response: '',
-                last_agent_email: ''
+                last_agent_email: '',
+                auto_request_sent: false,
+                manual_request_sent: false,
+                auto_ai_answer: '',
+                auto_ai_request: '',
+                auto_ai_agent: ''
             };
         }
 
@@ -3377,6 +3480,7 @@
                     ticket_id: payload.ticket_id,
                     feedback: payload.feedback
                 });
+                autoController.removeCompactWidget();
                 this.setRatingStatus(String(options.successMessage || 'Feedback sent successfully.'));
                 return true;
             } catch (error) {
@@ -3658,6 +3762,7 @@
 
         create(data) {
             this.close();
+            autoController.removeCompactWidget();
 
             this.data = data;
             this.restoreStateFromCache(data);
@@ -4019,7 +4124,8 @@
                     this.lastRequestForAi = currentContent;
                     this.saveCachedTicketState({
                         edited_content: currentContent,
-                        last_request: this.lastRequestForAi
+                        last_request: this.lastRequestForAi,
+                        manual_request_sent: true
                     });
                     const finalPayload = this.buildPayload(currentContent);
 
@@ -4119,6 +4225,250 @@
     // ============================================================================
 
     const modal = new BotPreviewModal();
+
+    // ============================================================================
+    // AUTO REQUEST CONTROLLER - авто-запрос при первом Reply + compact widget
+    // ============================================================================
+    const autoController = {
+        _widgetRatingInflight: false,
+
+        startReplyDetector() {
+            document.addEventListener('click', (e) => this._onDocumentClick(e), true);
+            logger.log('Reply detector started');
+        },
+
+        _isReplyButton(el) {
+            if (!el || el.tagName !== 'BUTTON') return false;
+            const text = String(el.textContent || '').trim().toLowerCase();
+            const replyTexts = ['reply', 'send', 'send reply', 'submit reply'];
+            if (replyTexts.includes(text)) return true;
+            if (el.matches('[data-action="reply"], [data-test-id*="reply"], [data-test-id*="send-reply"]')) return true;
+            return false;
+        },
+
+        _onDocumentClick(e) {
+            let el = e.target;
+            for (let i = 0; i < 4; i++) {
+                if (!el) break;
+                if (this._isReplyButton(el)) {
+                    this._handleReplyDetected();
+                    return;
+                }
+                el = el.parentElement;
+            }
+        },
+
+        _handleReplyDetected() {
+            const ticketId = getCurrentTicketIdFromLocation();
+            if (!ticketId) return;
+
+            const cached = modal.getCachedTicketState(ticketId);
+            if (cached.auto_request_sent || cached.manual_request_sent) {
+                logger.log('Auto AI request skipped: already sent for ticket', ticketId);
+                return;
+            }
+
+            // Mark sent immediately to prevent duplicate triggers
+            const prevTicketId = modal.ticketId;
+            modal.ticketId = ticketId;
+            modal.saveCachedTicketState({ auto_request_sent: true });
+            modal.ticketId = prevTicketId;
+
+            logger.log('Reply detected — firing auto AI request for ticket', ticketId);
+            this._fireAutoRequest(ticketId).catch(e => {
+                logger.error('Auto AI request failed', e);
+            });
+        },
+
+        async _fireAutoRequest(ticketId) {
+            const previewData = collectPreviewData();
+            if (!previewData.success && !previewData.warning) {
+                logger.warn('Auto AI request: no ticket data, aborting', previewData.error);
+                // Reset flag so it doesn't silently block future attempts
+                const prevTicketId = modal.ticketId;
+                modal.ticketId = ticketId;
+                modal.saveCachedTicketState({ auto_request_sent: false });
+                modal.ticketId = prevTicketId;
+                return;
+            }
+
+            const contentForAi = previewData.formatted_text || '';
+            if (!contentForAi) {
+                logger.warn('Auto AI request: empty content, aborting');
+                return;
+            }
+
+            const finalPayload = {
+                ticket_id: previewData.ticket_id || ticketId,
+                last_resolve_time: previewData.last_resolve_time || '',
+                used_resolve_time: previewData.used_resolve_time || '',
+                fallback_used: previewData.fallback_used === true,
+                client_messages: previewData.client_messages || [],
+                content_for_ai: contentForAi
+            };
+
+            // Temporarily set modal context for requestAiAnswer (which needs this.requestAbortController)
+            const prevTicketId = modal.ticketId;
+            const prevLastRequest = modal.lastRequestForAi;
+            const prevLastAgent = modal.lastAgentEmail;
+            modal.ticketId = ticketId;
+            modal.lastRequestForAi = contentForAi;
+            modal.lastAgentEmail = previewData.last_agent_email || '';
+
+            try {
+                logger.log('Auto AI request in flight for ticket', ticketId);
+                const aiAnswer = await modal.requestAiAnswer(finalPayload);
+
+                // If user navigated away — don't show widget
+                if (getCurrentTicketIdFromLocation() !== ticketId) {
+                    logger.log('Auto AI request: ticket changed before response, discarding');
+                    return;
+                }
+
+                if (modal.isAiFallbackResponse(aiAnswer)) {
+                    logger.warn('Auto AI request: fallback response received, widget suppressed');
+                    return;
+                }
+
+                // Persist answer in cache for widget feedback use
+                modal.ticketId = ticketId;
+                modal.saveCachedTicketState({
+                    auto_ai_answer: aiAnswer,
+                    auto_ai_request: contentForAi,
+                    auto_ai_agent: previewData.last_agent_email || ''
+                });
+
+                this.showCompactWidget(ticketId, aiAnswer);
+            } catch (e) {
+                logger.error('Auto AI request error', e);
+                // Reset flag on failure so it's not permanently blocked
+                modal.ticketId = ticketId;
+                modal.saveCachedTicketState({ auto_request_sent: false });
+            } finally {
+                // Only restore modal context if modal isn't currently open with its own data
+                if (!modal.overlay) {
+                    modal.ticketId = prevTicketId;
+                    modal.lastRequestForAi = prevLastRequest;
+                    modal.lastAgentEmail = prevLastAgent;
+                }
+            }
+        },
+
+        showCompactWidget(ticketId, aiAnswer) {
+            this.removeCompactWidget();
+            this._widgetRatingInflight = false;
+
+            const widget = document.createElement('div');
+            widget.id = AI_COMPACT_WIDGET_ID;
+            widget.innerHTML = `
+                <div class="ai-compact-title">AI готов</div>
+                <div class="ai-compact-buttons">
+                    <button class="ai-compact-btn" data-rating="good" title="Good">👍</button>
+                    <button class="ai-compact-btn" data-rating="not_great" title="Not great">😐</button>
+                    <button class="ai-compact-btn" data-rating="bad" title="Bad">👎</button>
+                </div>
+                <div class="ai-compact-subject-row">
+                    <input class="ai-compact-subject-input" placeholder="Subject (required)" type="text" maxlength="200" />
+                    <button class="ai-compact-submit-btn" disabled>Submit</button>
+                </div>
+                <div class="ai-compact-status"></div>
+            `;
+
+            document.body.appendChild(widget);
+
+            let selectedRating = '';
+            const subjectRow = widget.querySelector('.ai-compact-subject-row');
+            const subjectInput = widget.querySelector('.ai-compact-subject-input');
+            const submitBtn = widget.querySelector('.ai-compact-submit-btn');
+            const statusEl = widget.querySelector('.ai-compact-status');
+            const ratingBtns = widget.querySelectorAll('.ai-compact-btn');
+
+            const showStatus = (msg) => {
+                statusEl.textContent = msg;
+            };
+
+            const handleSuccess = () => {
+                showStatus('✓ Отправлено');
+                setTimeout(() => this.removeCompactWidget(), 1500);
+            };
+
+            ratingBtns.forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    if (this._widgetRatingInflight) return;
+                    selectedRating = btn.dataset.rating;
+                    ratingBtns.forEach(b => b.classList.remove('ai-compact-btn-selected'));
+                    btn.classList.add('ai-compact-btn-selected');
+
+                    if (selectedRating === 'good') {
+                        this._widgetRatingInflight = true;
+                        try { await modal.copyTextToClipboard(aiAnswer); } catch(e) {}
+                        await this._submitWidgetFeedback(ticketId, 'good', '', aiAnswer, showStatus, handleSuccess);
+                    } else {
+                        subjectRow.style.display = 'flex';
+                        subjectInput.focus();
+                    }
+                });
+            });
+
+            subjectInput.addEventListener('input', () => {
+                submitBtn.disabled = !subjectInput.value.trim();
+            });
+
+            submitBtn.addEventListener('click', async () => {
+                if (this._widgetRatingInflight) return;
+                const subject = subjectInput.value.trim();
+                if (!subject || !selectedRating) return;
+                this._widgetRatingInflight = true;
+                submitBtn.disabled = true;
+                await this._submitWidgetFeedback(ticketId, selectedRating, subject, aiAnswer, showStatus, handleSuccess);
+            });
+        },
+
+        async _submitWidgetFeedback(ticketId, rating, subject, aiAnswer, showStatus, onSuccess) {
+            showStatus('Отправка...');
+            const cached = modal.getCachedTicketState(ticketId);
+
+            const prevTicketId = modal.ticketId;
+            const prevLastRequest = modal.lastRequestForAi;
+            const prevLastAgent = modal.lastAgentEmail;
+            const prevLastResponse = modal.lastResponseForAi;
+            const prevInflight = modal.isFeedbackInFlight;
+
+            modal.ticketId = ticketId;
+            modal.lastRequestForAi = cached.auto_ai_request || '';
+            modal.lastAgentEmail = cached.auto_ai_agent || '';
+            modal.lastResponseForAi = aiAnswer;
+            modal.isFeedbackInFlight = false;
+
+            try {
+                const ok = await modal.submitAgentFeedback(rating, subject, aiAnswer, { silent: true });
+                if (ok) {
+                    onSuccess();
+                } else {
+                    showStatus('Ошибка: проверьте данные');
+                    this._widgetRatingInflight = false;
+                }
+            } catch(e) {
+                logger.error('Widget feedback submit failed', e);
+                showStatus('Ошибка отправки');
+                this._widgetRatingInflight = false;
+            } finally {
+                if (!modal.overlay) {
+                    modal.ticketId = prevTicketId;
+                    modal.lastRequestForAi = prevLastRequest;
+                    modal.lastAgentEmail = prevLastAgent;
+                    modal.lastResponseForAi = prevLastResponse;
+                    modal.isFeedbackInFlight = prevInflight;
+                }
+            }
+        },
+
+        removeCompactWidget() {
+            const existing = document.getElementById(AI_COMPACT_WIDGET_ID);
+            if (existing) existing.remove();
+            this._widgetRatingInflight = false;
+        }
+    };
 
     function createAiHelpButtonIfNeeded() {
         let button = document.getElementById(AI_HELP_BUTTON_ID);
@@ -4251,6 +4601,9 @@
             // Регистрируем ручную проверку обновлений через меню Tampermonkey
             registerManualUpdateMenuCommand();
 
+            // Запускаем детектор Reply-кнопки для авто-запросов
+            autoController.startReplyDetector();
+
             // Запускаем SPA observer после появления body
             startSpaObserver();
 
@@ -4275,6 +4628,8 @@
 
         logger.info(`Ticket URL changed: ${lastObservedTicketId || 'none'} -> ${currentTicketId || 'none'}`);
         lastObservedTicketId = currentTicketId;
+
+        autoController.removeCompactWidget();
 
         if (!currentTicketId) {
             clearInterceptedApiData('navigated away from ticket URL');
