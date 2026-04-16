@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      4.1.0
+// @version      4.1.1
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -2816,10 +2816,14 @@
             border: 1px solid #e2e8f0;
             border-radius: 10px;
             box-shadow: 0 4px 16px rgba(0,0,0,0.13);
-            padding: 10px 14px 10px;
-            min-width: 190px;
+            padding: 12px 14px 12px;
+            width: 320px;
+            max-height: calc(100vh - 90px);
+            display: flex;
+            flex-direction: column;
             font-family: inherit;
             font-size: 13px;
+            overflow: hidden;
         }
 
         .ai-compact-title {
@@ -2829,12 +2833,39 @@
             font-size: 12px;
             text-transform: uppercase;
             letter-spacing: 0.04em;
+            flex-shrink: 0;
+        }
+
+        .ai-compact-answer {
+            background: #f8fafc;
+            border-left: 3px solid #6366f1;
+            border-radius: 4px;
+            padding: 8px 10px;
+            font-size: 12px;
+            line-height: 1.55;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            overflow-y: auto;
+            max-height: 220px;
+            min-height: 60px;
+            color: #1e293b;
+            margin-bottom: 10px;
+            flex-shrink: 1;
+        }
+
+        .ai-compact-answer::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .ai-compact-answer::-webkit-scrollbar-thumb {
+            background: #c7d2fe;
+            border-radius: 4px;
         }
 
         .ai-compact-buttons {
             display: flex;
             gap: 8px;
-            margin-bottom: 0;
+            flex-shrink: 0;
         }
 
         .ai-compact-btn {
@@ -2864,6 +2895,7 @@
             flex-direction: column;
             gap: 6px;
             margin-top: 8px;
+            flex-shrink: 0;
         }
 
         .ai-compact-subject-input {
@@ -2901,6 +2933,7 @@
             font-size: 12px;
             color: #6366f1;
             font-weight: 500;
+            flex-shrink: 0;
         }
 
     `;
@@ -4360,8 +4393,10 @@
 
             const widget = document.createElement('div');
             widget.id = AI_COMPACT_WIDGET_ID;
+            const escapedAnswer = String(aiAnswer || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
             widget.innerHTML = `
                 <div class="ai-compact-title">AI готов</div>
+                <div class="ai-compact-answer">${escapedAnswer}</div>
                 <div class="ai-compact-buttons">
                     <button class="ai-compact-btn" data-rating="good" title="Good">👍</button>
                     <button class="ai-compact-btn" data-rating="not_great" title="Not great">😐</button>
