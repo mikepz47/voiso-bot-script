@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      4.1.1
+// @version      4.1.2
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -4348,6 +4348,8 @@
             modal.lastRequestForAi = contentForAi;
             modal.lastAgentEmail = previewData.last_agent_email || '';
 
+            setAiHelpButtonState(AI_HELP_BUTTON_STATE.LOADING);
+
             try {
                 logger.log('Auto AI request in flight for ticket', ticketId);
                 const aiAnswer = await modal.requestAiAnswer(finalPayload);
@@ -4355,11 +4357,13 @@
                 // If user navigated away — don't show widget
                 if (getCurrentTicketIdFromLocation() !== ticketId) {
                     logger.log('Auto AI request: ticket changed before response, discarding');
+                    setAiHelpButtonState(AI_HELP_BUTTON_STATE.IDLE);
                     return;
                 }
 
                 if (modal.isAiFallbackResponse(aiAnswer)) {
                     logger.warn('Auto AI request: fallback response received, widget suppressed');
+                    setAiHelpButtonState(AI_HELP_BUTTON_STATE.IDLE);
                     return;
                 }
 
@@ -4371,9 +4375,11 @@
                     auto_ai_agent: previewData.last_agent_email || ''
                 });
 
+                setAiHelpButtonState(AI_HELP_BUTTON_STATE.IDLE);
                 this.showCompactWidget(ticketId, aiAnswer);
             } catch (e) {
                 logger.error('Auto AI request error', e);
+                setAiHelpButtonState(AI_HELP_BUTTON_STATE.IDLE);
                 // Reset flag on failure so it's not permanently blocked
                 modal.ticketId = ticketId;
                 modal.saveCachedTicketState({ auto_request_sent: false });
@@ -4665,6 +4671,7 @@
         lastObservedTicketId = currentTicketId;
 
         autoController.removeCompactWidget();
+        setAiHelpButtonState(AI_HELP_BUTTON_STATE.IDLE);
 
         if (!currentTicketId) {
             clearInterceptedApiData('navigated away from ticket URL');
