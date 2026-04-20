@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      4.0.11
+// @version      4.0.12
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -2875,7 +2875,11 @@
 
         button.classList.remove('ai-bot-help-loading', 'ai-bot-help-success', 'ai-bot-help-error');
         button.removeAttribute('aria-busy');
-        button.textContent = AI_HELP_BUTTON_LABEL;
+        // Guard: only write textContent when it actually changed — avoids
+        // childList mutation that would re-trigger MutationObserver.
+        if (button.textContent !== AI_HELP_BUTTON_LABEL) {
+            button.textContent = AI_HELP_BUTTON_LABEL;
+        }
 
         if (state === AI_HELP_BUTTON_STATE.LOADING) {
             button.disabled = true;
@@ -4193,14 +4197,14 @@
         const targetSelect = actionsDiv.querySelector('.ant-select[class*="ticletSelect--"]');
         if (!targetSelect) return false;
 
-        // Already placed correctly
+        // Already placed correctly — don't touch DOM at all
         if (button.parentElement === actionsDiv && button.previousElementSibling === targetSelect) {
-            clearButtonInlineStyles(button);
             return true;
         }
 
         targetSelect.after(button);
         clearButtonInlineStyles(button);
+        button.style.marginLeft = '35px';
         return true;
     }
 
@@ -4222,7 +4226,11 @@
         return true;
     }
 
+    let lastInjectionTime = 0;
+
     function injectButton() {
+        lastInjectionTime = Date.now();
+
         const button = createAiHelpButtonIfNeeded();
         const previousParent = button.parentElement;
         const previousNextSibling = button.nextElementSibling;
@@ -4328,6 +4336,9 @@
         observer = new MutationObserver(() => {
             clearTimeout(observerTimeout);
             observerTimeout = setTimeout(() => {
+                // Cooldown: skip mutations caused by our own injection
+                if (Date.now() - lastInjectionTime < 300) return;
+
                 const prevTicketId = lastObservedTicketId;
                 handleTicketUrlChange();
                 const ticketChanged = prevTicketId !== lastObservedTicketId;
