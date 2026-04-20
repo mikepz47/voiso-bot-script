@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      4.0.9
+// @version      4.0.10
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -4172,6 +4172,38 @@
         return button;
     }
 
+    function clearButtonInlineStyles(button) {
+        if (!button) return;
+        button.style.position = '';
+        button.style.top = '';
+        button.style.bottom = '';
+        button.style.right = '';
+        button.style.left = '';
+        button.style.zIndex = '';
+        button.style.display = '';
+        button.style.margin = '';
+    }
+
+    function tryPlaceButtonInActions(button) {
+        if (!button || !document.body) return false;
+
+        const actionsDiv = document.querySelector('div.actions');
+        if (!actionsDiv) return false;
+
+        const targetSelect = actionsDiv.querySelector('.ant-select.ticletSelect--tI6wR');
+        if (!targetSelect) return false;
+
+        // Already placed correctly
+        if (button.parentElement === actionsDiv && button.previousElementSibling === targetSelect) {
+            clearButtonInlineStyles(button);
+            return true;
+        }
+
+        targetSelect.after(button);
+        clearButtonInlineStyles(button);
+        return true;
+    }
+
     function placeAiButtonAsFallback(button) {
         if (!button || !document.body) return false;
 
@@ -4195,20 +4227,12 @@
         const previousParent = button.parentElement;
         const previousNextSibling = button.nextElementSibling;
 
-        if (aiHelpButtonCurrentState === AI_HELP_BUTTON_STATE.LOADING) {
-            if (button.parentElement !== document.body && document.body) {
-                document.body.appendChild(button);
-            }
-            button.style.position = 'fixed';
-            button.style.zIndex = '9999';
-            button.style.display = 'block';
-            button.style.margin = '0';
-        } else {
+        if (!tryPlaceButtonInActions(button)) {
             placeAiButtonAsFallback(button);
         }
 
         if (button.parentElement !== previousParent || button.nextElementSibling !== previousNextSibling) {
-            logger.log('Floating AI panel trigger button injected');
+            logger.log('AI button injected into DOM');
         }
 
         renderAiHelpButtonState(button, aiHelpButtonCurrentState);
