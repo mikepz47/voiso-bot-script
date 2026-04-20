@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      4.0.10
+// @version      4.0.11
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -4190,7 +4190,7 @@
         const actionsDiv = document.querySelector('div.actions');
         if (!actionsDiv) return false;
 
-        const targetSelect = actionsDiv.querySelector('.ant-select.ticletSelect--tI6wR');
+        const targetSelect = actionsDiv.querySelector('.ant-select[class*="ticletSelect--"]');
         if (!targetSelect) return false;
 
         // Already placed correctly
@@ -4313,7 +4313,13 @@
         const button = getAiHelpButtonElement();
         if (!button || !button.isConnected) return true;
         if (!document.body) return false;
-        return button.parentElement !== document.body;
+
+        // If already inside div.actions — no need to reinject
+        const actionsDiv = document.querySelector('div.actions');
+        if (actionsDiv && button.parentElement === actionsDiv) return false;
+
+        // Fallback: if in document.body (fixed position), try to move into actions
+        return true;
     }
 
     function startSpaObserver() {
