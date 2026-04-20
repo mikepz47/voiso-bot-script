@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      4.0.8
+// @version      4.0.9
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -4180,9 +4180,10 @@
         }
 
         button.style.position = 'fixed';
-        button.style.top = '30px';
-        button.style.bottom = '';
-        button.style.right = '70px';
+        button.style.top = '';
+        button.style.bottom = '12px';
+        button.style.right = '';
+        button.style.left = '280px';
         button.style.zIndex = '9999';
         button.style.display = 'block';
         button.style.margin = '0';
