@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      4.1.3
+// @version      4.1.4
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -2836,6 +2836,30 @@
             flex-shrink: 0;
         }
 
+        .ai-compact-label {
+            font-size: 11px;
+            color: #475569;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            margin: 8px 0 4px;
+        }
+
+        .ai-compact-request {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 4px;
+            color: #334155;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 11px;
+            line-height: 1.45;
+            max-height: 110px;
+            overflow-y: auto;
+            padding: 7px 8px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
         .ai-compact-answer {
             background: #f8fafc;
             border-left: 3px solid #6366f1;
@@ -2853,6 +2877,11 @@
             flex-shrink: 1;
         }
 
+        #ai-bot-compact-widget.ai-compact-fallback .ai-compact-answer {
+            background: #fff7ed;
+            border-left-color: #f97316;
+        }
+
         .ai-compact-answer::-webkit-scrollbar {
             width: 4px;
         }
@@ -2865,19 +2894,21 @@
         .ai-compact-buttons {
             display: flex;
             gap: 8px;
+            flex-wrap: wrap;
             flex-shrink: 0;
         }
 
         .ai-compact-btn {
-            flex: 1;
+            flex: 1 1 calc(50% - 8px);
             border: 1px solid #e2e8f0;
             background: #f8fafc;
             border-radius: 6px;
-            padding: 5px 0;
-            font-size: 18px;
+            padding: 6px 8px;
+            font-size: 12px;
             cursor: pointer;
             transition: background 0.15s, border-color 0.15s;
-            line-height: 1;
+            line-height: 1.2;
+            min-height: 30px;
         }
 
         .ai-compact-btn:hover {
@@ -2946,6 +2977,9 @@
         SUCCESS: 'success',
         ERROR: 'error'
     };
+    const AI_FEEDBACK_VALUES = new Set(['good', 'not_great', 'bad', 'error', 'call_related']);
+    const AI_FEEDBACK_SUBJECT_REQUIRED_VALUES = new Set(['not_great', 'bad']);
+    const AI_CALL_RELATED_SUBJECT = 'call-related';
     let aiHelpButtonCurrentState = AI_HELP_BUTTON_STATE.IDLE;
     let aiHelpButtonResetTimer = null;
     let aiHelpButtonMotionRafId = null;
@@ -3150,7 +3184,7 @@
                     ? normalizeEmail(cached.last_agent_email)
                     : ''
             );
-            this.pendingRating = (this.selectedRating === 'not_great' || this.selectedRating === 'bad')
+            this.pendingRating = AI_FEEDBACK_SUBJECT_REQUIRED_VALUES.has(this.selectedRating)
                 ? this.selectedRating
                 : '';
 
@@ -3300,8 +3334,7 @@
             const answer = String(text || '');
             const isFallback = this.isAiFallbackResponse(answer);
             answerSection.style.display = 'block';
-            // If fallback response — hide rating section, style as warning
-            this.setRatingSectionVisibility(!isFallback && answer.length > 0);
+            this.setRatingSectionVisibility(answer.length > 0);
             answerContent.classList.toggle('ai-bot-answer-fallback', isFallback);
             this.setRatingStatus('');
             this.cachedAiAnswer = answer;
@@ -3457,12 +3490,12 @@
             const subjectValue = String(subject || '').trim();
 
             const silent = options.silent === true;
-            if (!['good', 'not_great', 'bad', 'error'].includes(feedbackValue)) {
+            if (!AI_FEEDBACK_VALUES.has(feedbackValue)) {
                 if (!silent) this.setRatingStatus('Unknown feedback value.');
                 return false;
             }
 
-            if ((feedbackValue === 'not_great' || feedbackValue === 'bad') && !subjectValue && !silent) {
+            if (AI_FEEDBACK_SUBJECT_REQUIRED_VALUES.has(feedbackValue) && !subjectValue && !silent) {
                 this.setRatingStatus('Please enter a subject.');
                 return false;
             }
@@ -3497,7 +3530,7 @@
                 await this.sendFeedbackToSpreadsheet(payload);
 
                 this.selectedRating = feedbackValue;
-                this.pendingRating = feedbackValue === 'not_great' || feedbackValue === 'bad'
+                this.pendingRating = AI_FEEDBACK_SUBJECT_REQUIRED_VALUES.has(feedbackValue)
                     ? feedbackValue
                     : '';
                 this.ratingSubject = subjectValue;
@@ -3517,7 +3550,9 @@
                     ticket_id: payload.ticket_id,
                     feedback: payload.feedback
                 });
-                autoController.removeCompactWidget();
+                if (options.keepCompactWidget !== true) {
+                    autoController.removeCompactWidget();
+                }
                 this.setRatingStatus(String(options.successMessage || 'Feedback sent successfully.'));
                 return true;
             } catch (error) {
@@ -3876,7 +3911,7 @@
 
             const initialPayload = this.buildPayload(this.editedContent);
             const hasCachedAnswer = Boolean(this.cachedAiAnswer);
-            const showSubjectForm = this.selectedRating === 'not_great' || this.selectedRating === 'bad';
+            const showSubjectForm = AI_FEEDBACK_SUBJECT_REQUIRED_VALUES.has(this.selectedRating);
             const fallbackInfo = data.fallback_used
                 ? `
                     <div class="ai-bot-section">
@@ -3929,6 +3964,7 @@
                             <button class="ai-bot-rating-button${this.selectedRating === 'good' ? ' ai-bot-rating-active' : ''}" id="ai-bot-rating-good" data-rating="good">Good</button>
                             <button class="ai-bot-rating-button${this.selectedRating === 'not_great' ? ' ai-bot-rating-active' : ''}" id="ai-bot-rating-not-great" data-rating="not_great">Not great</button>
                             <button class="ai-bot-rating-button${this.selectedRating === 'bad' ? ' ai-bot-rating-active' : ''}" id="ai-bot-rating-bad" data-rating="bad">Bad</button>
+                            <button class="ai-bot-rating-button${this.selectedRating === 'call_related' ? ' ai-bot-rating-active' : ''}" id="ai-bot-rating-call-related" data-rating="call_related">Call-related</button>
                         </div>
                         <div id="ai-bot-rating-form" class="ai-bot-rating-form" style="display: ${showSubjectForm ? 'block' : 'none'};">
                             <label for="ai-bot-rating-subject-input">Enter request subject</label>
@@ -4024,7 +4060,7 @@
             const ratingButtons = document.querySelectorAll('.ai-bot-rating-button');
 
             this.setRatingButtonsState(this.selectedRating);
-            this.setRatingFormVisibility(this.selectedRating === 'not_great' || this.selectedRating === 'bad');
+            this.setRatingFormVisibility(AI_FEEDBACK_SUBJECT_REQUIRED_VALUES.has(this.selectedRating));
             this.setLoadingLayout(false);
 
             if (contentEditor) {
@@ -4087,7 +4123,32 @@
                         return;
                     }
 
-                    if (rating === 'not_great' || rating === 'bad') {
+                    if (rating === 'call_related') {
+                        const answerText = String(answerContent?.textContent || this.cachedAiAnswer || '');
+                        if (!answerText.trim()) {
+                            this.setRatingStatus('No answer available for feedback.');
+                            return;
+                        }
+
+                        this.selectedRating = 'call_related';
+                        this.pendingRating = '';
+                        this.ratingSubject = AI_CALL_RELATED_SUBJECT;
+                        if (ratingSubjectInput) {
+                            ratingSubjectInput.value = '';
+                        }
+                        this.setRatingButtonsState('call_related');
+                        this.setRatingFormVisibility(false);
+
+                        await this.submitAgentFeedback(
+                            'call_related',
+                            AI_CALL_RELATED_SUBJECT,
+                            answerText,
+                            { successMessage: 'Call-related feedback sent successfully.' }
+                        );
+                        return;
+                    }
+
+                    if (AI_FEEDBACK_SUBJECT_REQUIRED_VALUES.has(rating)) {
                         this.selectedRating = rating;
                         this.pendingRating = rating;
                         this.setRatingButtonsState(rating);
@@ -4107,7 +4168,7 @@
                     }
 
                     const rating = this.pendingRating || this.selectedRating;
-                    if (rating !== 'not_great' && rating !== 'bad') {
+                    if (!AI_FEEDBACK_SUBJECT_REQUIRED_VALUES.has(rating)) {
                         this.setRatingStatus('Select "Not great" or "Bad" first.');
                         return;
                     }
@@ -4268,24 +4329,46 @@
     // ============================================================================
     const autoController = {
         _widgetRatingInflight: false,
+        _replyDetectorStarted: false,
 
         startReplyDetector() {
+            if (this._replyDetectorStarted) return;
+            this._replyDetectorStarted = true;
             document.addEventListener('click', (e) => this._onDocumentClick(e), true);
             logger.log('Reply detector started');
         },
 
         _isReplyButton(el) {
-            if (!el || el.tagName !== 'BUTTON') return false;
-            const text = String(el.textContent || '').trim().toLowerCase();
+            if (!el || typeof el !== 'object') return false;
+            const tag = String(el.tagName || '').toLowerCase();
+            const isButtonLike = tag === 'button' || el.getAttribute?.('role') === 'button' || el.classList?.contains('ant-btn');
+            if (!isButtonLike) return false;
+            if (el.disabled || el.getAttribute?.('aria-disabled') === 'true') return false;
+
+            const text = String(el.textContent || '')
+                .replace(/\s+/g, ' ')
+                .trim()
+                .toLowerCase();
+            const marker = [
+                text,
+                el.getAttribute?.('aria-label'),
+                el.getAttribute?.('title'),
+                el.getAttribute?.('data-action'),
+                el.getAttribute?.('data-test-id'),
+                el.getAttribute?.('data-testid')
+            ]
+                .map(value => String(value || '').toLowerCase())
+                .filter(Boolean)
+                .join(' ');
             const replyTexts = ['reply', 'send', 'send reply', 'submit reply'];
             if (replyTexts.includes(text)) return true;
-            if (el.matches('[data-action="reply"], [data-test-id*="reply"], [data-test-id*="send-reply"]')) return true;
+            if (/\breply\b/.test(marker) || /\bsend[-_\s]?reply\b/.test(marker)) return true;
             return false;
         },
 
         _onDocumentClick(e) {
-            let el = e.target;
-            for (let i = 0; i < 4; i++) {
+            let el = e.target?.nodeType === 1 ? e.target : e.target?.parentElement;
+            for (let i = 0; i < 6; i++) {
                 if (!el) break;
                 if (this._isReplyButton(el)) {
                     this._handleReplyDetected();
@@ -4317,8 +4400,29 @@
             });
         },
 
+        async _collectPreviewDataWithRetry(ticketId) {
+            let previewData = collectPreviewData();
+            if (previewData.success || previewData.warning) {
+                return previewData;
+            }
+
+            if (previewData.error === 'Unable to load ticket data.') {
+                if (ticketId) {
+                    await fetchTicketDataDirectly(ticketId);
+                    previewData = collectPreviewData();
+                }
+
+                for (let i = 0; i < 5 && !previewData.success && !previewData.warning; i++) {
+                    await new Promise(resolve => setTimeout(resolve, 600));
+                    previewData = collectPreviewData();
+                }
+            }
+
+            return previewData;
+        },
+
         async _fireAutoRequest(ticketId) {
-            const previewData = collectPreviewData();
+            const previewData = await this._collectPreviewDataWithRetry(ticketId);
             if (!previewData.success && !previewData.warning) {
                 logger.warn('Auto AI request: no ticket data, aborting', previewData.error);
                 // Reset flag so it doesn't silently block future attempts
@@ -4332,6 +4436,10 @@
             const contentForAi = previewData.formatted_text || '';
             if (!contentForAi) {
                 logger.warn('Auto AI request: empty content, aborting');
+                const prevTicketId = modal.ticketId;
+                modal.ticketId = ticketId;
+                modal.saveCachedTicketState({ auto_request_sent: false });
+                modal.ticketId = prevTicketId;
                 return;
             }
 
@@ -4352,6 +4460,7 @@
             modal.lastRequestForAi = contentForAi;
             modal.lastAgentEmail = previewData.last_agent_email || '';
 
+            injectButton();
             setAiHelpButtonState(AI_HELP_BUTTON_STATE.LOADING);
 
             try {
@@ -4365,12 +4474,6 @@
                     return;
                 }
 
-                if (modal.isAiFallbackResponse(aiAnswer)) {
-                    logger.warn('Auto AI request: fallback response received, widget suppressed');
-                    setAiHelpButtonState(AI_HELP_BUTTON_STATE.IDLE);
-                    return;
-                }
-
                 // Persist answer in cache for widget feedback use
                 modal.ticketId = ticketId;
                 modal.saveCachedTicketState({
@@ -4379,11 +4482,11 @@
                     auto_ai_agent: previewData.last_agent_email || ''
                 });
 
-                setAiHelpButtonState(AI_HELP_BUTTON_STATE.IDLE);
-                this.showCompactWidget(ticketId, aiAnswer);
+                setAiHelpButtonState(AI_HELP_BUTTON_STATE.SUCCESS, { resetAfterMs: 1800 });
+                this.showCompactWidget(ticketId, aiAnswer, contentForAi);
             } catch (e) {
                 logger.error('Auto AI request error', e);
-                setAiHelpButtonState(AI_HELP_BUTTON_STATE.IDLE);
+                setAiHelpButtonState(AI_HELP_BUTTON_STATE.ERROR, { resetAfterMs: 3200 });
                 // Reset flag on failure so it's not permanently blocked
                 modal.ticketId = ticketId;
                 modal.saveCachedTicketState({ auto_request_sent: false });
@@ -4397,20 +4500,26 @@
             }
         },
 
-        showCompactWidget(ticketId, aiAnswer) {
+        showCompactWidget(ticketId, aiAnswer, requestText = '') {
             this.removeCompactWidget();
             this._widgetRatingInflight = false;
 
             const widget = document.createElement('div');
             widget.id = AI_COMPACT_WIDGET_ID;
-            const escapedAnswer = String(aiAnswer || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            widget.classList.toggle('ai-compact-fallback', modal.isAiFallbackResponse(aiAnswer));
+            const escapedRequest = modal.escapeHtml(requestText || modal.getCachedTicketState(ticketId).auto_ai_request || '');
+            const escapedAnswer = modal.escapeHtml(aiAnswer || '');
             widget.innerHTML = `
                 <div class="ai-compact-title">AI готов</div>
+                <div class="ai-compact-label">Sent content</div>
+                <div class="ai-compact-request">${escapedRequest}</div>
+                <div class="ai-compact-label">AI answer</div>
                 <div class="ai-compact-answer">${escapedAnswer}</div>
                 <div class="ai-compact-buttons">
-                    <button class="ai-compact-btn" data-rating="good" title="Good">👍</button>
-                    <button class="ai-compact-btn" data-rating="not_great" title="Not great">😐</button>
-                    <button class="ai-compact-btn" data-rating="bad" title="Bad">👎</button>
+                    <button class="ai-compact-btn" data-rating="good" title="Good">Good</button>
+                    <button class="ai-compact-btn" data-rating="not_great" title="Not great">Not great</button>
+                    <button class="ai-compact-btn" data-rating="bad" title="Bad">Bad</button>
+                    <button class="ai-compact-btn" data-rating="call_related" title="Call-related">Call-related</button>
                 </div>
                 <div class="ai-compact-subject-row">
                     <input class="ai-compact-subject-input" placeholder="Subject (required)" type="text" maxlength="200" />
@@ -4448,7 +4557,23 @@
                         this._widgetRatingInflight = true;
                         try { await modal.copyTextToClipboard(aiAnswer); } catch(e) {}
                         await this._submitWidgetFeedback(ticketId, 'good', '', aiAnswer, showStatus, handleSuccess);
-                    } else {
+                        return;
+                    }
+
+                    if (selectedRating === 'call_related') {
+                        this._widgetRatingInflight = true;
+                        await this._submitWidgetFeedback(
+                            ticketId,
+                            'call_related',
+                            AI_CALL_RELATED_SUBJECT,
+                            aiAnswer,
+                            showStatus,
+                            handleSuccess
+                        );
+                        return;
+                    }
+
+                    if (AI_FEEDBACK_SUBJECT_REQUIRED_VALUES.has(selectedRating)) {
                         subjectRow.style.display = 'flex';
                         subjectInput.focus();
                     }
@@ -4486,7 +4611,10 @@
             modal.isFeedbackInFlight = false;
 
             try {
-                const ok = await modal.submitAgentFeedback(rating, subject, aiAnswer, { silent: true });
+                const ok = await modal.submitAgentFeedback(rating, subject, aiAnswer, {
+                    silent: true,
+                    keepCompactWidget: true
+                });
                 if (ok) {
                     onSuccess();
                 } else {
