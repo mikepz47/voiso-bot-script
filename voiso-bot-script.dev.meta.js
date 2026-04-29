@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         VOISO Support - AI Bot Assistant
+// @name         VOISO Support - AI Bot Assistant (dev-v4.1)
 // @namespace    http://tampermonkey.net/
-// @version      4.1.3
-// @description  Sticky AI panel + стабильный parser + live AI request
+// @version      4.1.0-dev
+// @description  DEV VERSION — не для продакшена
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
 // @grant        GM_xmlhttpRequest
@@ -12,7 +12,7 @@
 // @connect      lk01.nl.wavix.net
 // @connect      script.google.com
 // @connect      script.googleusercontent.com
-// @updateURL    https://raw.githubusercontent.com/mikepz47/voiso-bot-script/main/voiso-bot-script.meta.js
-// @downloadURL  https://raw.githubusercontent.com/mikepz47/voiso-bot-script/main/voiso-bot-script.user.js
+// @updateURL    https://raw.githubusercontent.com/mikepz47/voiso-bot-script/dev-v4.1/voiso-bot-script.dev.meta.js
+// @downloadURL  https://raw.githubusercontent.com/mikepz47/voiso-bot-script/dev-v4.1/voiso-bot-script.user.js
 // @run-at       document-start
 // ==/UserScript==
