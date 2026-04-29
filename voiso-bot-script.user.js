@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      4.1.4
+// @version      4.1.5
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -4510,7 +4510,7 @@
             const escapedRequest = modal.escapeHtml(requestText || modal.getCachedTicketState(ticketId).auto_ai_request || '');
             const escapedAnswer = modal.escapeHtml(aiAnswer || '');
             widget.innerHTML = `
-                <div class="ai-compact-title">AI готов</div>
+                <div class="ai-compact-title">AI ready</div>
                 <div class="ai-compact-label">Sent content</div>
                 <div class="ai-compact-request">${escapedRequest}</div>
                 <div class="ai-compact-label">AI answer</div>
