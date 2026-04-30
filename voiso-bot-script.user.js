@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      4.1.5
+// @version      4.1.6
 // @description  Sticky AI panel + стабильный parser + live AI request
 // @author       Ной V3.3
 // @match        https://support.voiso.com/*
@@ -4330,61 +4330,186 @@
     const autoController = {
         _widgetRatingInflight: false,
         _replyDetectorStarted: false,
+        _replyComposerObserver: null,
+        _knownReplyComposerVisible: false,
 
         startReplyDetector() {
             if (this._replyDetectorStarted) return;
             this._replyDetectorStarted = true;
-            document.addEventListener('click', (e) => this._onDocumentClick(e), true);
+            document.addEventListener('pointerdown', (e) => this._onReplyIntentEvent(e), true);
+            document.addEventListener('mousedown', (e) => this._onReplyIntentEvent(e), true);
+            document.addEventListener('click', (e) => this._onReplyIntentEvent(e), true);
+            this._startReplyComposerObserver();
             logger.log('Reply detector started');
         },
 
-        _isReplyButton(el) {
-            if (!el || typeof el !== 'object') return false;
-            const tag = String(el.tagName || '').toLowerCase();
-            const isButtonLike = tag === 'button' || el.getAttribute?.('role') === 'button' || el.classList?.contains('ant-btn');
-            if (!isButtonLike) return false;
-            if (el.disabled || el.getAttribute?.('aria-disabled') === 'true') return false;
+        _isOwnUiElement(el) {
+            return Boolean(
+                el?.closest?.(`#${AI_COMPACT_WIDGET_ID}, #ai-bot-modal-overlay, #${AI_HELP_BUTTON_ID}`)
+            );
+        },
+
+        _getElementSignal(el) {
+            if (!el || typeof el !== 'object') return '';
 
             const text = String(el.textContent || '')
                 .replace(/\s+/g, ' ')
                 .trim()
-                .toLowerCase();
-            const marker = [
+                .slice(0, 180);
+            const className = typeof el.className === 'string' ? el.className : '';
+            const values = [
                 text,
+                className,
+                el.id,
+                el.getAttribute?.('role'),
                 el.getAttribute?.('aria-label'),
                 el.getAttribute?.('title'),
+                el.getAttribute?.('name'),
+                el.getAttribute?.('placeholder'),
                 el.getAttribute?.('data-action'),
                 el.getAttribute?.('data-test-id'),
-                el.getAttribute?.('data-testid')
-            ]
+                el.getAttribute?.('data-testid'),
+                el.getAttribute?.('data-qa'),
+                el.getAttribute?.('data-cy')
+            ];
+
+            return values
                 .map(value => String(value || '').toLowerCase())
                 .filter(Boolean)
                 .join(' ');
-            const replyTexts = ['reply', 'send', 'send reply', 'submit reply'];
-            if (replyTexts.includes(text)) return true;
-            if (/\breply\b/.test(marker) || /\bsend[-_\s]?reply\b/.test(marker)) return true;
+        },
+
+        _isReplyIntentElement(el) {
+            if (!el || typeof el !== 'object') return false;
+            if (this._isOwnUiElement(el)) return false;
+
+            const tag = String(el.tagName || '').toLowerCase();
+            const role = String(el.getAttribute?.('role') || '').toLowerCase();
+            const marker = this._getElementSignal(el);
+            const className = typeof el.className === 'string' ? el.className.toLowerCase() : '';
+            const hasTabIndex = typeof el.hasAttribute === 'function' && el.hasAttribute('tabindex');
+            const computedCursor = pageWindow.getComputedStyle
+                ? String(pageWindow.getComputedStyle(el).cursor || '').toLowerCase()
+                : '';
+            const isButtonLike = (
+                tag === 'button' ||
+                tag === 'a' ||
+                role === 'button' ||
+                role === 'menuitem' ||
+                role === 'tab' ||
+                el.classList?.contains('ant-btn') ||
+                el.classList?.contains('ant-dropdown-menu-item') ||
+                /(^|[\s_-])(btn|button|tab|menu-item|dropdown-item|action|toolbar-item)($|[\s_-])/.test(className) ||
+                hasTabIndex ||
+                computedCursor === 'pointer'
+            );
+            if (!isButtonLike) return false;
+            if (el.disabled || el.getAttribute?.('aria-disabled') === 'true') return false;
+
+            return (
+                /\breply\b/.test(marker) ||
+                /\brespond\b/.test(marker) ||
+                /\bsend[-_\s]?reply\b/.test(marker) ||
+                /\bsubmit[-_\s]?reply\b/.test(marker) ||
+                /\banswer\b/.test(marker) ||
+                /\bответ(?:ить|а)?\b/.test(marker)
+            );
+        },
+
+        _findReplyIntentElementFromEvent(e) {
+            const path = typeof e?.composedPath === 'function'
+                ? e.composedPath()
+                : [];
+
+            for (const node of path.slice(0, 10)) {
+                if (node?.nodeType !== 1) continue;
+                if (this._isReplyIntentElement(node)) return node;
+            }
+
+            let el = e.target?.nodeType === 1 ? e.target : e.target?.parentElement;
+            for (let i = 0; i < 8; i++) {
+                if (!el) break;
+                if (this._isReplyIntentElement(el)) return el;
+                el = el.parentElement;
+            }
+
+            return null;
+        },
+
+        _onReplyIntentEvent(e) {
+            const replyElement = this._findReplyIntentElementFromEvent(e);
+            if (!replyElement) return;
+
+            this._handleReplyDetected(`event:${e.type}`, replyElement);
+        },
+
+        _startReplyComposerObserver() {
+            if (this._replyComposerObserver || !document.body) return;
+
+            this._knownReplyComposerVisible = this._isReplyComposerVisible();
+            this._replyComposerObserver = new MutationObserver(() => {
+                clearTimeout(this._replyComposerObserverTimer);
+                this._replyComposerObserverTimer = setTimeout(() => {
+                    const isVisible = this._isReplyComposerVisible();
+                    if (isVisible && !this._knownReplyComposerVisible) {
+                        this._handleReplyDetected('composer-visible');
+                    }
+                    this._knownReplyComposerVisible = isVisible;
+                }, 180);
+            });
+
+            this._replyComposerObserver.observe(document.body, {
+                childList: true,
+                subtree: true,
+                attributes: true,
+                attributeFilter: ['class', 'style', 'aria-hidden']
+            });
+        },
+
+        _isReplyComposerVisible() {
+            const selectors = [
+                'textarea',
+                '[contenteditable="true"]',
+                '[role="textbox"]',
+                '.ql-editor',
+                '.DraftEditor-root'
+            ];
+            const nodes = Array.from(document.querySelectorAll(selectors.join(', ')));
+
+            for (const node of nodes) {
+                if (!node || this._isOwnUiElement(node)) continue;
+                const marker = this._getElementSignal(node);
+                const ancestorMarker = this._getElementSignal(node.closest?.('[class], [data-testid], [data-test-id], form') || node.parentElement);
+                const combined = `${marker} ${ancestorMarker}`;
+                const looksLikeReplyComposer = (
+                    /\breply\b/.test(combined) ||
+                    /\brespond\b/.test(combined) ||
+                    /\bcomment\b/.test(combined) ||
+                    /\bmessage\b/.test(combined) ||
+                    /\bответ(?:ить|а)?\b/.test(combined)
+                );
+                if (!looksLikeReplyComposer) continue;
+
+                const rect = node.getBoundingClientRect?.();
+                if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+                return true;
+            }
+
             return false;
         },
 
-        _onDocumentClick(e) {
-            let el = e.target?.nodeType === 1 ? e.target : e.target?.parentElement;
-            for (let i = 0; i < 6; i++) {
-                if (!el) break;
-                if (this._isReplyButton(el)) {
-                    this._handleReplyDetected();
-                    return;
-                }
-                el = el.parentElement;
-            }
-        },
-
-        _handleReplyDetected() {
+        _handleReplyDetected(reason = 'unknown', sourceElement = null) {
             const ticketId = getCurrentTicketIdFromLocation();
             if (!ticketId) return;
 
+            const sourceSignal = sourceElement ? this._getElementSignal(sourceElement).slice(0, 220) : '';
             const cached = modal.getCachedTicketState(ticketId);
             if (cached.auto_request_sent || cached.manual_request_sent) {
-                logger.log('Auto AI request skipped: already sent for ticket', ticketId);
+                logger.log('Auto AI request skipped: already sent for ticket', {
+                    ticket_id: ticketId,
+                    reason,
+                    source: sourceSignal
+                });
                 return;
             }
 
@@ -4394,7 +4519,11 @@
             modal.saveCachedTicketState({ auto_request_sent: true });
             modal.ticketId = prevTicketId;
 
-            logger.log('Reply detected — firing auto AI request for ticket', ticketId);
+            logger.log('Reply detected — firing auto AI request for ticket', {
+                ticket_id: ticketId,
+                reason,
+                source: sourceSignal
+            });
             this._fireAutoRequest(ticketId).catch(e => {
                 logger.error('Auto AI request failed', e);
             });
