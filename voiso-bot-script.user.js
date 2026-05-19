@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
-// @version      4.1.6
+// @version      4.1.7
 // @description  Sticky AI panel + stable parser + live AI request
 // @author       Noi V3.3
 // @match        https://support.voiso.com/*
