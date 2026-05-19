@@ -2,8 +2,8 @@
 // @name         VOISO Support - AI Bot Assistant (dev-v4.1)
 // @namespace    http://tampermonkey.net/
 // @version      4.1.0-dev
-// @description  DEV VERSION — не для продакшена
-// @author       Ной V3.3
+// @description  DEV VERSION - not for production
+// @author       Noi V3.3
 // @match        https://support.voiso.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_registerMenuCommand

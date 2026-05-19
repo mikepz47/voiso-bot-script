@@ -2,8 +2,8 @@
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
 // @version      4.1.6
-// @description  Sticky AI panel + стабильный parser + live AI request
-// @author       Ной V3.3
+// @description  Sticky AI panel + stable parser + live AI request
+// @author       Noi V3.3
 // @match        https://support.voiso.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_registerMenuCommand

@@ -2,8 +2,8 @@
 // @name         VOISO Support - AI Bot Assistant
 // @namespace    http://tampermonkey.net/
 // @version      4.1.6
-// @description  Sticky AI panel + стабильный parser + live AI request
-// @author       Ной V3.3
+// @description  Sticky AI panel + stable parser + live AI request
+// @author       Noi V3.3
 // @match        https://support.voiso.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_registerMenuCommand
@@ -33,6 +33,9 @@
     ];
     const AI_REQUEST_TIMEOUT_MS = 300000;
     const FEEDBACK_REQUEST_TIMEOUT_MS = 20000;
+    const FEEDBACK_REQUEST_RETRY_COUNT = 2;
+    const FEEDBACK_REQUEST_RETRY_DELAY_MS = 1200;
+    const FEEDBACK_AGENT_FALLBACK_VALUE = 'error';
     const AI_TYPING_EFFECT_ENABLED = true;
     const AI_TYPING_EFFECT_MAX_CHARS = 3000;
     const AI_TYPING_EFFECT_INTERVAL_MS = 16;
@@ -3124,6 +3127,7 @@
             this.lastRequestForAi = '';
             this.lastResponseForAi = '';
             this.lastAgentEmail = '';
+            this.lastFeedbackErrorMessage = '';
             this.escapeListener = null;
             this.typingEffectTimer = null;
             this.requestAbortController = null;
@@ -3378,7 +3382,7 @@
 
         resolveAgentEmailForFeedback() {
             const fromState = normalizeEmail(this.lastAgentEmail);
-            if (fromState) return fromState;
+            if (fromState && fromState !== FEEDBACK_AGENT_FALLBACK_VALUE) return fromState;
 
             const fromData = normalizeEmail(
                 this.data?.last_agent_email ||
@@ -3399,7 +3403,15 @@
                 ? String(responseText)
                 : String(this.lastResponseForAi || this.cachedAiAnswer || '');
             const ticketId = String(this.ticketId || this.data?.ticket_id || 'unknown');
-            const agentEmail = this.resolveAgentEmailForFeedback();
+            const resolvedAgentEmail = this.resolveAgentEmailForFeedback();
+            const agentEmail = resolvedAgentEmail || FEEDBACK_AGENT_FALLBACK_VALUE;
+
+            if (!resolvedAgentEmail) {
+                logger.warn('Agent email was not found for feedback; using fallback value.', {
+                    ticket_id: ticketId,
+                    fallback_agent: agentEmail
+                });
+            }
 
             return {
                 ticket_id: ticketId,
@@ -3411,17 +3423,7 @@
             };
         }
 
-        async sendFeedbackToSpreadsheet(payload) {
-            const feedbackEndpoint = getFeedbackEndpoint();
-            if (!feedbackEndpoint) {
-                throw new Error('Feedback endpoint was not found. Set localStorage["voiso_feedback_endpoint"].');
-            }
-
-            const tmRequestFn = getTampermonkeyRequestFn();
-            const headers = {
-                'Content-Type': 'application/json'
-            };
-
+        async sendFeedbackToSpreadsheetOnce(feedbackEndpoint, payload, tmRequestFn, headers) {
             let responseStatus = 0;
             let responseText = '';
 
@@ -3483,6 +3485,78 @@
                 }
                 throw new Error(`Feedback server returned HTTP ${responseStatus}.`);
             }
+
+            const trimmedResponseText = String(responseText || '').trim();
+            const responseJson = safeJsonParse(trimmedResponseText);
+            const spreadsheetReturnedError = Boolean(
+                responseJson && (
+                    responseJson.success === false ||
+                    responseJson.ok === false ||
+                    String(responseJson.status || '').toLowerCase() === 'error' ||
+                    responseJson.error
+                )
+            );
+
+            if (spreadsheetReturnedError) {
+                const backendMessage = pickFirstString([
+                    responseJson?.error?.message,
+                    responseJson?.error,
+                    responseJson?.message,
+                    trimmedResponseText
+                ]);
+                throw new Error(`Feedback server returned an error: ${backendMessage || 'unknown error'}`);
+            }
+
+            if (/^error\b/i.test(trimmedResponseText)) {
+                throw new Error(`Feedback server returned an error: ${trimmedResponseText}`);
+            }
+        }
+
+        isRetryableFeedbackError(error) {
+            const message = String(error?.message || '').toLowerCase();
+            if (message.includes('endpoint was not found')) return false;
+            if (message.includes('cancelled')) return false;
+            return true;
+        }
+
+        async sendFeedbackToSpreadsheet(payload) {
+            const feedbackEndpoint = getFeedbackEndpoint();
+            if (!feedbackEndpoint) {
+                throw new Error('Feedback endpoint was not found. Set localStorage["voiso_feedback_endpoint"].');
+            }
+
+            const tmRequestFn = getTampermonkeyRequestFn();
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+            const maxAttempts = FEEDBACK_REQUEST_RETRY_COUNT + 1;
+            let lastError = null;
+
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                try {
+                    await this.sendFeedbackToSpreadsheetOnce(feedbackEndpoint, payload, tmRequestFn, headers);
+                    return;
+                } catch (error) {
+                    lastError = error;
+
+                    if (!this.isRetryableFeedbackError(error) || attempt >= maxAttempts) {
+                        break;
+                    }
+
+                    logger.warn('Feedback submit attempt failed; retrying Spreadsheet request.', {
+                        attempt,
+                        max_attempts: maxAttempts,
+                        error: String(error?.message || error)
+                    });
+
+                    await new Promise(resolve => setTimeout(
+                        resolve,
+                        FEEDBACK_REQUEST_RETRY_DELAY_MS * attempt
+                    ));
+                }
+            }
+
+            throw lastError || new Error('Failed to send feedback.');
         }
 
         async submitAgentFeedback(feedback, subject, responseText, options = {}) {
@@ -3490,31 +3564,33 @@
             const subjectValue = String(subject || '').trim();
 
             const silent = options.silent === true;
+            this.lastFeedbackErrorMessage = '';
             if (!AI_FEEDBACK_VALUES.has(feedbackValue)) {
+                this.lastFeedbackErrorMessage = 'Unknown feedback value.';
                 if (!silent) this.setRatingStatus('Unknown feedback value.');
                 return false;
             }
 
-            if (AI_FEEDBACK_SUBJECT_REQUIRED_VALUES.has(feedbackValue) && !subjectValue && !silent) {
-                this.setRatingStatus('Please enter a subject.');
+            if (AI_FEEDBACK_SUBJECT_REQUIRED_VALUES.has(feedbackValue) && !subjectValue) {
+                this.lastFeedbackErrorMessage = 'Please enter a subject.';
+                if (!silent) this.setRatingStatus('Please enter a subject.');
                 return false;
             }
 
             if (this.isFeedbackInFlight) {
+                this.lastFeedbackErrorMessage = 'Feedback is already being sent.';
                 this.setRatingStatus('Feedback is already being sent...');
                 return false;
             }
 
             const payload = this.buildFeedbackPayload(feedbackValue, subjectValue, responseText);
-            if (!String(payload.agent || '').trim()) {
-                if (!silent) this.setRatingStatus('Feedback cannot be sent: agent email was not found.');
-                return false;
-            }
             if (!String(payload.request || '').trim()) {
+                this.lastFeedbackErrorMessage = 'Feedback cannot be sent: request is missing.';
                 if (!silent) this.setRatingStatus('Feedback cannot be sent: request is missing.');
                 return false;
             }
             if (!String(payload.response || '').trim()) {
+                this.lastFeedbackErrorMessage = 'Feedback cannot be sent: response is missing.';
                 this.setRatingStatus('Feedback cannot be sent: response is missing.');
                 return false;
             }
@@ -3553,9 +3629,11 @@
                 if (options.keepCompactWidget !== true) {
                     autoController.removeCompactWidget();
                 }
+                this.lastFeedbackErrorMessage = '';
                 this.setRatingStatus(String(options.successMessage || 'Feedback sent successfully.'));
                 return true;
             } catch (error) {
+                this.lastFeedbackErrorMessage = String(error?.message || 'Failed to send feedback.');
                 logger.error('Feedback submit failed', {
                     ticket_id: payload.ticket_id,
                     feedback: payload.feedback,
@@ -4297,6 +4375,7 @@
             this.lastRequestForAi = '';
             this.lastResponseForAi = '';
             this.lastAgentEmail = '';
+            this.lastFeedbackErrorMessage = '';
             this.escapeListener = null;
             this.typingEffectTimer = null;
             this.requestAbortController = null;
@@ -4671,7 +4750,7 @@
             };
 
             const handleSuccess = () => {
-                showStatus('✓ Отправлено');
+                showStatus('Sent');
                 setTimeout(() => this.removeCompactWidget(), 1500);
             };
 
@@ -4724,7 +4803,7 @@
         },
 
         async _submitWidgetFeedback(ticketId, rating, subject, aiAnswer, showStatus, onSuccess) {
-            showStatus('Отправка...');
+            showStatus('Sending...');
             const cached = modal.getCachedTicketState(ticketId);
 
             const prevTicketId = modal.ticketId;
@@ -4747,12 +4826,12 @@
                 if (ok) {
                     onSuccess();
                 } else {
-                    showStatus('Ошибка: проверьте данные');
+                    showStatus(modal.lastFeedbackErrorMessage || 'Could not send feedback. Check ticket data.');
                     this._widgetRatingInflight = false;
                 }
             } catch(e) {
                 logger.error('Widget feedback submit failed', e);
-                showStatus('Ошибка отправки');
+                showStatus('Could not send feedback.');
                 this._widgetRatingInflight = false;
             } finally {
                 if (!modal.overlay) {
